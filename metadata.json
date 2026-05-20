@@ -1,0 +1,8 @@
+{
+  "name": "AGT System Report Tool",
+  "description": "System report tool for the AGT Galactic Archives",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
