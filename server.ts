@@ -6,6 +6,17 @@ async function startServer() {
   const app = express();
   const PORT = 3000;
 
+  // Support direct local serving of geonms-font.ttf and AGTicon.png from workspace root
+  app.get("/geonms-font.ttf", (req, res) => {
+    res.sendFile(path.join(process.cwd(), "geonms-font.ttf"));
+  });
+  app.get("/AGTicon.png", (req, res) => {
+    res.sendFile(path.join(process.cwd(), "AGTicon.png"));
+  });
+  app.get("/AGTIcon.png", (req, res) => {
+    res.sendFile(path.join(process.cwd(), "AGTicon.png"));
+  });
+
   // Proxy route for Google Drive assets to bypass CORS
   app.get("/api/asset-proxy", async (req, res) => {
     const fileId = req.query.id as string;

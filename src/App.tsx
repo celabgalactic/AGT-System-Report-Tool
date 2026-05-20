@@ -132,6 +132,18 @@ export default function App() {
     }
   };
 
+  const [logoUrl, setLogoUrl] = useState('/AGTicon.png');
+  const [logoTriedCount, setLogoTriedCount] = useState(0);
+  const [pageSize, setPageSize] = useState<number>(() => {
+    const saved = localStorage.getItem('agt_page_size');
+    return saved ? parseInt(saved, 10) : 15;
+  });
+  const [currentPage, setCurrentPage] = useState<number>(1);
+
+  useEffect(() => {
+    localStorage.setItem('agt_page_size', String(pageSize));
+  }, [pageSize]);
+
   const [searchKey, setSearchKey] = useState('');
   const [selectedGalaxy, setSelectedGalaxy] = useState('All');
   const [data, setData] = useState<any[]>([]);
@@ -146,6 +158,10 @@ export default function App() {
       localStorage.setItem('sheet_reporter_url', sheetUrl);
     }
   }, [sheetUrl]);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [matchedRecords, pageSize]);
 
   const fetchData = async () => {
     if (!sheetUrl) {
@@ -311,6 +327,29 @@ export default function App() {
     doc.text(`Extraction Ref: ${searchKey || 'All'} / ${selectedGalaxy}`, 20, 30);
     doc.text(`Generated on: ${new Date().toLocaleString()}`, 20, 35);
     doc.text(`Result Count: ${matchedRecords.length} Verified Entries`, 20, 40);
+
+    // Inject AGT Icon logo on Page 1, right of report summary introduction text
+    try {
+      const imgElements = document.getElementsByTagName('img');
+      let logoImg: HTMLImageElement | null = null;
+      for (let i = 0; i < imgElements.length; i++) {
+        if (imgElements[i].alt === 'AGT Logo') {
+          logoImg = imgElements[i];
+          break;
+        }
+      }
+      if (logoImg && logoImg.style.display !== 'none' && logoImg.complete) {
+        doc.addImage(logoImg, 'PNG', 240, 15, 25, 25);
+      } else {
+        const tempImg = new Image();
+        tempImg.src = logoUrl;
+        if (tempImg.complete) {
+          doc.addImage(tempImg, 'PNG', 240, 15, 25, 25);
+        }
+      }
+    } catch (err) {
+      console.warn('PDF image logo inject failed:', err);
+    }
     
     const activeCols = columns.filter(col => col.enabled);
     const urlMap = new Map<string, string>();
@@ -407,6 +446,15 @@ export default function App() {
     return matchedRecords.length;
   }, [matchedRecords]);
 
+  const totalPages = useMemo(() => {
+    return Math.ceil(matchedRecords.length / pageSize);
+  }, [matchedRecords.length, pageSize]);
+
+  const paginatedRecords = useMemo(() => {
+    const startIdx = (currentPage - 1) * pageSize;
+    return matchedRecords.slice(startIdx, startIdx + pageSize);
+  }, [matchedRecords, currentPage, pageSize]);
+
   return (
     <div 
       onMouseDown={handleManualPlay}
@@ -417,18 +465,31 @@ export default function App() {
       <header className="border-b border-agt-orange/5 bg-black/40 backdrop-blur-md sticky top-0 z-50">
         <div className="max-w-5xl mx-auto px-6 h-20 flex items-center justify-between">
           <div className="flex items-center gap-4">
-            <img 
-              src="/api/asset-proxy?id=1h9HvAGeru6Vo7PiWdLbXmGogD8TySnnz" 
-              alt="AGT Logo" 
-              className="w-10 h-10 object-contain opacity-90"
-              onError={(e) => {
-                const img = e.target as HTMLImageElement;
-                img.style.display = 'none';
-                if (!img.parentElement?.querySelector('.agt-fallback')) {
-                  img.parentElement?.insertAdjacentHTML('afterbegin', '<div class="agt-fallback w-10 h-10 border border-agt-orange rounded-sm flex items-center justify-center shrink-0"><span class="text-agt-orange font-bold text-[10px] tracking-tighter">AGT</span></div>');
-                }
-              }}
-            />
+            <div className="relative w-10 h-10 flex items-center justify-center shrink-0">
+              <img 
+                src={logoUrl} 
+                alt="AGT Logo" 
+                className={`w-10 h-10 object-contain opacity-90 ${logoTriedCount >= 3 ? 'hidden' : ''}`}
+                onError={(e) => {
+                  if (logoTriedCount === 0) {
+                    setLogoTriedCount(1);
+                    setLogoUrl('/AGTIcon.png');
+                  } else if (logoTriedCount === 1) {
+                    setLogoTriedCount(2);
+                    setLogoUrl('/api/asset-proxy?id=1h9HvAGeru6Vo7PiWdLbXmGogD8TySnnz');
+                  } else {
+                    setLogoTriedCount(3);
+                    const img = e.target as HTMLImageElement;
+                    img.style.display = 'none';
+                  }
+                }}
+              />
+              {logoTriedCount >= 3 && (
+                <div className="agt-fallback w-10 h-10 border border-agt-orange rounded-sm flex items-center justify-center shrink-0">
+                  <span className="text-agt-orange font-bold text-[10px] tracking-tighter">AGT</span>
+                </div>
+              )}
+            </div>
             <div className="flex flex-col">
               <h1 className="font-bold text-xs tracking-[0.2em] uppercase text-agt-orange">Alliance of Galactic Travellers</h1>
               <span className="text-[9px] text-agt-orange uppercase tracking-[0.3em] font-bold">AGT System Report Tool</span>
@@ -636,6 +697,36 @@ export default function App() {
                       </div>
                     </div>
 
+                    {/* Pagination Config Section */}
+                    <div className="space-y-4">
+                      <h3 className="text-[10px] uppercase tracking-widest font-bold text-agt-orange flex items-center gap-2">
+                        <FileText className="w-3 h-3" />
+                        Pagination Config
+                      </h3>
+                      <div className="space-y-2">
+                        <p className="text-[10px] text-agt-orange/60 uppercase tracking-widest font-bold">Default Records Displayed</p>
+                        <div className="flex gap-2">
+                          {[15, 30, 50, 100].map(size => {
+                            const isSelected = pageSize === size;
+                            return (
+                              <button
+                                key={size}
+                                onClick={() => setPageSize(size)}
+                                className={`flex-1 py-3 rounded-xl border text-xs font-mono font-bold transition-all ${
+                                  isSelected 
+                                    ? 'bg-agt-orange text-black border-agt-orange shadow-[0_0_15px_rgba(255,180,81,0.5)] scale-102' 
+                                    : 'bg-black/40 border-white/5 text-agt-orange hover:bg-agt-orange/5'
+                                }`}
+                                id={`pagesize-${size}-btn`}
+                              >
+                                {size}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    </div>
+
                     {/* Audio Section */}
                     <div className="col-span-1 md:col-span-2 pt-8 border-t border-white/5 space-y-4">
                       <div className="flex items-center justify-between">
@@ -685,6 +776,25 @@ export default function App() {
                         </h3>
                         <p className="text-[10px] text-agt-orange uppercase tracking-[0.2em]">Verified Galactic Ledger Matches</p>
                       </div>
+
+                      <div className="flex flex-wrap items-center gap-3">
+                        {reportType === 'simple' && (
+                          <button
+                            onClick={downloadFullReportPdf}
+                            className="flex items-center gap-3 px-8 py-4 border-2 border-agt-orange bg-transparent text-agt-orange hover:bg-agt-orange/10 rounded-xl text-[10px] uppercase tracking-[0.2em] font-bold transition-all shadow-[0_4px_20px_rgba(255,180,81,0.1)] active:scale-[0.98]"
+                          >
+                            <Download className="w-4 h-4" />
+                            <span>Export PDF</span>
+                          </button>
+                        )}
+                        <button
+                          onClick={downloadCsv}
+                          className="flex items-center gap-3 px-8 py-4 border-2 border-agt-orange bg-transparent text-agt-orange hover:bg-agt-orange/10 rounded-xl text-[10px] uppercase tracking-[0.2em] font-bold transition-all shadow-[0_4px_20px_rgba(255,180,81,0.1)] active:scale-[0.98]"
+                        >
+                          <Table className="w-4 h-4" />
+                          <span>Export CSV</span>
+                        </button>
+                      </div>
                     </div>
 
                     <div className="overflow-x-auto custom-scrollbar">
@@ -699,7 +809,7 @@ export default function App() {
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-agt-orange/5">
-                          {matchedRecords.map((record, rIdx) => (
+                          {paginatedRecords.map((record, rIdx) => (
                             <tr key={rIdx} className="hover:bg-agt-orange/[0.02] transition-colors group">
                               {columns.filter(col => col.enabled).map((col, cIdx) => (
                                 <td key={cIdx} className="p-4 text-[11px] text-agt-orange font-mono whitespace-nowrap overflow-hidden text-ellipsis max-w-[200px]">
@@ -726,6 +836,82 @@ export default function App() {
                       </table>
                     </div>
 
+                    {/* Pagination Navigation Bar */}
+                    {matchedRecords.length > pageSize && (
+                      <div className="p-6 border-t border-agt-orange/5 bg-agt-orange/[0.02] flex flex-col md:flex-row items-center justify-between gap-4">
+                        <div className="text-[11px] uppercase tracking-wider text-agt-orange/80 font-mono">
+                          Showing Page <span className="text-agt-orange font-bold font-sans">{currentPage}</span> of <span className="text-agt-orange font-bold font-sans">{totalPages}</span> <span className="text-agt-orange/40">({matchedRecords.length} total rows)</span>
+                        </div>
+
+                        <div className="flex flex-wrap items-center gap-2">
+                          <button
+                            onClick={() => setCurrentPage(1)}
+                            disabled={currentPage === 1}
+                            className="px-3 py-1.5 rounded-lg border border-agt-orange/20 bg-black/40 text-[10px] uppercase font-bold tracking-widest text-agt-orange hover:bg-agt-orange/10 disabled:opacity-30 disabled:pointer-events-none transition-all"
+                          >
+                            First
+                          </button>
+
+                          <button
+                            onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
+                            disabled={currentPage === 1}
+                            className="px-3 py-1.5 rounded-lg border border-agt-orange/20 bg-black/40 text-[10px] uppercase font-bold tracking-widest text-agt-orange hover:bg-agt-orange/10 disabled:opacity-30 disabled:pointer-events-none transition-all"
+                          >
+                            Prev
+                          </button>
+
+                          <div className="flex items-center gap-1">
+                            {Array.from({ length: totalPages }).map((_, idx) => {
+                              const pageNum = idx + 1;
+                              if (totalPages > 6) {
+                                if (pageNum !== 1 && pageNum !== totalPages && Math.abs(pageNum - currentPage) > 1) {
+                                  if (pageNum === 2 && currentPage > 3) {
+                                    return <span key="ellipsis-start" className="text-agt-orange/40 font-mono text-[10px] px-1">...</span>;
+                                  }
+                                  if (pageNum === totalPages - 1 && currentPage < totalPages - 2) {
+                                    return <span key="ellipsis-end" className="text-agt-orange/40 font-mono text-[10px] px-1">...</span>;
+                                  }
+                                  return null;
+                                }
+                              }
+
+                              const isCurrent = pageNum === currentPage;
+                              return (
+                                <button
+                                  key={pageNum}
+                                  onClick={() => setCurrentPage(pageNum)}
+                                  className={`w-8 h-8 rounded-lg flex items-center justify-center font-mono text-xs transition-all ${
+                                    isCurrent
+                                      ? 'bg-agt-orange text-black font-extrabold shadow-[0_0_15px_rgba(255,180,81,0.6)] ring-2 ring-agt-orange ring-offset-2 ring-offset-black scale-110'
+                                      : 'border border-agt-orange/10 bg-black/20 text-agt-orange hover:bg-agt-orange/10'
+                                  }`}
+                                  id={`page-btn-${pageNum}`}
+                                >
+                                  {pageNum}
+                                </button>
+                              );
+                            })}
+                          </div>
+
+                          <button
+                            onClick={() => setCurrentPage(prev => Math.min(totalPages, prev + 1))}
+                            disabled={currentPage === totalPages}
+                            className="px-3 py-1.5 rounded-lg border border-agt-orange/20 bg-black/40 text-[10px] uppercase font-bold tracking-widest text-agt-orange hover:bg-agt-orange/10 disabled:opacity-30 disabled:pointer-events-none transition-all"
+                          >
+                            Next
+                          </button>
+
+                          <button
+                            onClick={() => setCurrentPage(totalPages)}
+                            disabled={currentPage === totalPages}
+                            className="px-3 py-1.5 rounded-lg border border-agt-orange/20 bg-black/40 text-[10px] uppercase font-bold tracking-widest text-agt-orange hover:bg-agt-orange/10 disabled:opacity-30 disabled:pointer-events-none transition-all"
+                          >
+                            Last
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
                     <div className="p-6 border-t border-agt-orange/5 flex flex-col md:flex-row items-center justify-between gap-6 bg-agt-orange/[0.01]">
                       <div className="flex items-center gap-4">
                         <div className="flex items-center gap-2">
@@ -735,25 +921,6 @@ export default function App() {
                         <span className="text-[9px] font-mono text-agt-orange uppercase tracking-widest hidden md:inline">
                           Index Reference: {Math.random().toString(16).substring(2, 8).toUpperCase()}
                         </span>
-                      </div>
-
-                      <div className="flex flex-wrap items-center gap-3">
-                        {reportType === 'simple' && (
-                          <button
-                            onClick={downloadFullReportPdf}
-                            className="flex items-center gap-3 px-8 py-4 border-2 border-agt-orange bg-transparent text-agt-orange hover:bg-agt-orange/10 rounded-xl text-[10px] uppercase tracking-[0.2em] font-bold transition-all shadow-[0_4px_20px_rgba(255,180,81,0.1)] active:scale-[0.98]"
-                          >
-                            <Download className="w-4 h-4" />
-                            <span>Download Full PDF Report</span>
-                          </button>
-                        )}
-                        <button
-                          onClick={downloadCsv}
-                          className="flex items-center gap-3 px-8 py-4 border-2 border-agt-orange bg-transparent text-agt-orange hover:bg-agt-orange/10 rounded-xl text-[10px] uppercase tracking-[0.2em] font-bold transition-all shadow-[0_4px_20px_rgba(255,180,81,0.1)] active:scale-[0.98]"
-                        >
-                          <Table className="w-4 h-4" />
-                          <span>Download CSV File</span>
-                        </button>
                       </div>
                     </div>
                   </motion.section>

@@ -2,7 +2,8 @@
 
 @font-face {
   font-family: 'CustomFont';
-  src: url('/api/asset-proxy?id=1GM-QSURTqQ-9sPwvDf0PA_jb5T5D9kZ4');
+  src: url('/geonms-font.ttf') format('truetype'),
+       url('/api/asset-proxy?id=1GM-QSURTqQ-9sPwvDf0PA_jb5T5D9kZ4');
   font-weight: normal;
   font-style: normal;
   font-display: swap;
