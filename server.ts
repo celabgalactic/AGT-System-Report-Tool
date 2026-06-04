@@ -6,9 +6,12 @@ async function startServer() {
   const app = express();
   const PORT = 3000;
 
-  // Support direct local serving of geonms-font.ttf and AGTicon.png from workspace root
+  // Support direct local serving of NMSFuturaProBook_Kerned.ttf, geonms-font.ttf (fallback), and AGTicon.png
+  app.get("/NMSFuturaProBook_Kerned.ttf", (req, res) => {
+    res.sendFile(path.join(process.cwd(), "src", "NMSFuturaProBook_Kerned.ttf"));
+  });
   app.get("/geonms-font.ttf", (req, res) => {
-    res.sendFile(path.join(process.cwd(), "geonms-font.ttf"));
+    res.sendFile(path.join(process.cwd(), "src", "NMSFuturaProBook_Kerned.ttf"));
   });
   app.get("/AGTicon.png", (req, res) => {
     res.sendFile(path.join(process.cwd(), "AGTicon.png"));

@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useState, useEffect, useMemo, useRef, ChangeEvent } from 'react';
+import { useState, useEffect, useMemo, useRef, useCallback, ChangeEvent, ReactNode } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   Search, 
@@ -25,6 +25,11 @@ import Papa from 'papaparse';
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { CIVILIZATIONS, GALAXIES } from './constants';
+import { LanguageCode, LANGUAGES, TRANSLATIONS, translateColumnHeader } from './translations';
+// @ts-ignore
+import starSystemsIcon from './star-systems-icon.png';
+// @ts-ignore
+import agtAnthem from './AGT Anthem (Instrumental).mp3';
 
 // Column configuration mapping
 interface ColumnConfig {
@@ -33,7 +38,76 @@ interface ColumnConfig {
   rawIndex: number;
 }
 
-type ReportType = 'simple' | 'detailed';
+type ReportType = 'simple' | 'detailed' | 'custom';
+
+const colLetterToIdx = (letter: string): number => {
+  let col = 0;
+  letter.toUpperCase().trim().split('').forEach(char => {
+    col = col * 26 + (char.charCodeAt(0) - 64);
+  });
+  return col - 1;
+};
+
+const parseExcelRange = (rangeStr: string): number[] => {
+  const parts = rangeStr.toUpperCase().split(/\s+to\s+|\s*-\s*/);
+  if (parts.length === 2) {
+    const startIdx = colLetterToIdx(parts[0]);
+    const endIdx = colLetterToIdx(parts[1]);
+    const indices: number[] = [];
+    for (let i = Math.min(startIdx, endIdx); i <= Math.max(startIdx, endIdx); i++) {
+      indices.push(i);
+    }
+    return indices;
+  }
+  return [colLetterToIdx(rangeStr)];
+};
+
+const CUSTOM_COLUMN_DEFS = [
+  { id: 'A', label: 'Galaxy', letters: 'A' },
+  { id: 'B', label: 'Region', letters: 'B' },
+  { id: 'C', label: 'System Name', letters: 'C' },
+  { id: 'G', label: 'Original name', letters: 'G' },
+  { id: 'H', label: 'Coordinates', letters: 'H' },
+  { id: 'I', label: 'Glyphs', letters: 'I' },
+  { id: 'K', label: 'Survey', letters: 'K' },
+  { id: 'L', label: 'Discoverer', letters: 'L' },
+  { id: 'P', label: 'Survey Date', letters: 'P' },
+  { id: 'O', label: 'Discovery Date', letters: 'O' },
+  { id: 'N', label: 'Giant?', letters: 'N' },
+  { id: 'Q', label: 'BH/Atlas', letters: 'Q' },
+  { id: 'R', label: 'Dissonant', letters: 'R' },
+  { id: 'S', label: 'Civ', letters: 'S' },
+  { id: 'V', label: 'Platform', letters: 'V' },
+  { id: 'W', label: 'Mode', letters: 'W' },
+  { id: 'X', label: 'Stars', letters: 'X' },
+  { id: 'Y', label: 'Category', letters: 'Y' },
+  { id: 'Z', label: 'Color', letters: 'Z' },
+  { id: 'AA', label: 'Planets', letters: 'AA' },
+  { id: 'AB', label: 'Moons', letters: 'AB' },
+  { id: 'AC', label: 'Faction', letters: 'AC' },
+  { id: 'AE', label: 'Distance', letters: 'AE' },
+  { id: 'AF', label: 'Water', letters: 'AF' },
+  { id: 'AG', label: 'Economy', letters: 'AG' },
+  { id: 'AH', label: 'Wealth', letters: 'AH' },
+  { id: 'AI', label: 'Ebuy', letters: 'AI' },
+  { id: 'AJ', label: 'ESell', letters: 'AJ' },
+  { id: 'AK', label: 'Conflict', letters: 'AK' },
+  { id: 'AL', label: 'Release', letters: 'AL' },
+  { id: 'CQ', label: 'Rel#', letters: 'CQ' },
+  { id: 'AN_AR', label: 'Trade', letters: 'AN to AR' },
+  { id: 'AS_BG', label: 'Updates', letters: 'AS to BG' },
+  { id: 'BM_BU', label: 'Notes', letters: 'BM to BU' },
+  { id: 'BV', label: 'Phantom', letters: 'BV' },
+  { id: 'BW', label: 'CTR Access', letters: 'BW' },
+  { id: 'BY', label: 'Wiki Link', letters: 'BY' },
+  { id: 'BZ_CD', label: 'Other Links', letters: 'BZ to CD' },
+  { id: 'CE_CJ', label: 'Legacy Info', letters: 'CE to CJ' },
+  { id: 'CL', label: 'Age', letters: 'CL' },
+  { id: 'CM', label: 'Research', letters: 'CM' },
+  { id: 'CN', label: 'Misc', letters: 'CN' },
+  { id: 'CY', label: 'Wealth Lvl', letters: 'CY' },
+  { id: 'CZ', label: 'Conflict Lvl', letters: 'CZ' }
+];
 
 const CIV_ACRONYMS: Record<string, string> = {
   'Alliance of Galactic Travellers': 'AGT',
@@ -64,6 +138,91 @@ const getDisplayValue = (val: any, colIdx?: number) => {
   }
   return strVal;
 };
+
+interface AutocompleteProps {
+  value: string;
+  onChange: (val: string) => void;
+  suggestions: string[];
+  placeholder: string;
+  id: string;
+  icon: ReactNode;
+}
+
+function AutocompleteInput({ value, onChange, suggestions, placeholder, id, icon }: AutocompleteProps) {
+  const [isOpen, setIsOpen] = useState(false);
+  const [filterText, setFilterText] = useState(value);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    setFilterText(value);
+  }, [value]);
+
+  const filteredSuggestions = useMemo(() => {
+    const text = filterText.trim().toLowerCase();
+    const pool = Array.from(new Set(['All', ...suggestions]));
+    if (!text) return pool.slice(0, 10);
+    return pool
+      .filter(s => s.toLowerCase().includes(text) && s.toLowerCase() !== text)
+      .slice(0, 10);
+  }, [filterText, suggestions]);
+
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+        setIsOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  return (
+    <div ref={containerRef} className="relative w-full group">
+      <div className="absolute inset-y-0 left-0 pl-6 flex items-center pointer-events-none text-[#FFB451] transition-colors">
+        {icon}
+      </div>
+      <input
+        id={id}
+        type="text"
+        value={filterText}
+        placeholder={placeholder}
+        onFocus={() => setIsOpen(true)}
+        onChange={(e) => {
+          const val = e.target.value;
+          setFilterText(val);
+          onChange(val);
+        }}
+        className="block w-full pl-14 pr-12 py-5 bg-[#1d1d1d] border-2 border-[#FF0500] rounded-full text-lg font-mono tracking-wider focus:outline-none focus:ring-2 focus:ring-[#FF0500] focus:border-[#FF0500] transition-all input-glow text-[#FFB451] shadow-[0_0_30px_rgba(255,5,0,0.05)] placeholder-[#FFB451]/30"
+      />
+      
+      <AnimatePresence>
+        {isOpen && filteredSuggestions.length > 0 && (
+          <motion.div
+            initial={{ opacity: 0, y: -10 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -10 }}
+            className="absolute z-[80] left-0 right-0 mt-2 bg-[#161616] border border-[#FF0500] rounded-2xl overflow-hidden shadow-[0_10px_30px_rgba(255,5,0,0.4)] max-h-60 overflow-y-auto settings-scrollbar"
+          >
+            {filteredSuggestions.map((suggestion) => (
+              <button
+                key={suggestion}
+                type="button"
+                onMouseDown={() => {
+                  onChange(suggestion);
+                  setFilterText(suggestion);
+                  setIsOpen(false);
+                }}
+                className="w-full text-left px-6 py-3 text-sm font-mono text-white hover:bg-[#E25530] hover:text-white transition-colors border-b border-[#FF0500]/10 last:border-0"
+              >
+                {suggestion}
+              </button>
+            ))}
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
 
 export default function App() {
   const [reportType, setReportType] = useState<ReportType>('simple');
@@ -139,14 +298,114 @@ export default function App() {
     return saved ? parseInt(saved, 10) : 15;
   });
   const [currentPage, setCurrentPage] = useState<number>(1);
+  const [fontScale, setFontScale] = useState<string>(() => {
+    return localStorage.getItem('agt_font_scale') || '1x';
+  });
+  const [sortColumn, setSortColumn] = useState<string | null>(null);
+  const [sortDirection, setSortDirection] = useState<'asc' | 'desc' | null>(null);
 
   useEffect(() => {
     localStorage.setItem('agt_page_size', String(pageSize));
   }, [pageSize]);
 
-  const [searchKey, setSearchKey] = useState('');
+  useEffect(() => {
+    localStorage.setItem('agt_font_scale', fontScale);
+  }, [fontScale]);
+
+  const [language, setLanguage] = useState<LanguageCode>(() => {
+    return (localStorage.getItem('agt_app_language') as LanguageCode) || 'en';
+  });
+
+  useEffect(() => {
+    localStorage.setItem('agt_app_language', language);
+  }, [language]);
+
+  const t = useCallback((key: string): string => {
+    if (language === 'en') return key;
+    const langSet = TRANSLATIONS[language];
+    if (langSet && langSet[key]) {
+      return langSet[key];
+    }
+    return key;
+  }, [language]);
+
+  const [searchKey, setSearchKey] = useState('All');
   const [selectedGalaxy, setSelectedGalaxy] = useState('All');
+  const [selectedRegion, setSelectedRegion] = useState('All');
+  const [discovererName, setDiscovererName] = useState('');
+  const [surveyorName, setSurveyorName] = useState('');
+  const [generationSeconds, setGenerationSeconds] = useState(0);
+  const [pdfErrorMsg, setPdfErrorMsg] = useState<string | null>(null);
+  const [searchLoading, setSearchLoading] = useState(false);
+  const [reportGeneratingLoading, setReportGeneratingLoading] = useState(false);
+
+  useEffect(() => {
+    let interval: any = null;
+    if (reportGeneratingLoading) {
+      setGenerationSeconds(0);
+      interval = setInterval(() => {
+        setGenerationSeconds(prev => prev + 1);
+      }, 1000);
+    } else {
+      setGenerationSeconds(0);
+    }
+    return () => {
+      if (interval) clearInterval(interval);
+    };
+  }, [reportGeneratingLoading]);
+
+  const [enabledCustomColumns, setEnabledCustomColumns] = useState<Record<string, boolean>>(() => {
+    const saved = localStorage.getItem('agt_custom_columns_toggles');
+    if (saved) {
+      try {
+        return JSON.parse(saved);
+      } catch (e) {
+        // ignore
+      }
+    }
+    const defaults: Record<string, boolean> = {};
+    CUSTOM_COLUMN_DEFS.forEach(def => {
+      defaults[def.id] = true;
+    });
+    return defaults;
+  });
+
+  useEffect(() => {
+    localStorage.setItem('agt_custom_columns_toggles', JSON.stringify(enabledCustomColumns));
+  }, [enabledCustomColumns]);
+
   const [data, setData] = useState<any[]>([]);
+
+  const civSuggestions = useMemo(() => {
+    const rawList = data.map(row => String(row._rawRow ? row._rawRow[18] : '').trim()).filter(Boolean);
+    const unique = Array.from(new Set([...CIVILIZATIONS, ...rawList]));
+    return unique.sort();
+  }, [data]);
+
+  const galaxySuggestions = useMemo(() => {
+    const rawList = data.map(row => String(row._rawRow ? row._rawRow[0] : '').trim()).filter(Boolean);
+    const unique = Array.from(new Set([...GALAXIES, ...rawList]));
+    return unique.sort();
+  }, [data]);
+
+  const regionSuggestions = useMemo(() => {
+    const rawList = data.map(row => String(row._rawRow ? row._rawRow[1] : '').trim()).filter(Boolean);
+    const unique = Array.from(new Set(rawList));
+    return unique.sort();
+  }, [data]);
+
+  const discovererSuggestions = useMemo(() => {
+    const rawList = data.map(row => String(row._rawRow ? row._rawRow[11] : '').trim()).filter(Boolean);
+    const unique = Array.from(new Set(rawList));
+    return unique.sort();
+  }, [data]);
+
+  const surveyorSuggestions = useMemo(() => {
+    const rawList = data.map(row => String(row._rawRow ? row._rawRow[10] : '').trim()).filter(Boolean);
+    const unique = Array.from(new Set(rawList));
+    return unique.sort();
+  }, [data]);
+
   const [columns, setColumns] = useState<ColumnConfig[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -171,6 +430,8 @@ export default function App() {
     }
 
     setLoading(true);
+    setSearchLoading(true);
+    const startTime = Date.now();
     setError(null);
     setMatchedRecords([]);
 
@@ -198,7 +459,11 @@ export default function App() {
           const rawRows = results.data as string[][];
           if (rawRows.length < 2) {
             setError('The source sheet data is insufficient (need at least 2 rows).');
-            setLoading(false);
+            const elapsed = Date.now() - startTime;
+            setTimeout(() => {
+              setLoading(false);
+              setSearchLoading(false);
+            }, Math.max(0, 1500 - elapsed));
             return;
           }
 
@@ -207,7 +472,23 @@ export default function App() {
           const simpleIndices = [0, 1, 2, 6, 7, 10, 11, 14, 15, 18, 76];
           const detailedIndices = [0, 1, 2, 6, 7, 8, 10, 11, 13, 14, 15, 17, 18, 22, 23, 24, 25, 26, 27, 28, 31, 32, 33, 34, 35, 36, 37, 76];
           
-          const targetIndexes = reportType === 'simple' ? simpleIndices : detailedIndices;
+          let targetIndexes: number[];
+          if (reportType === 'simple') {
+            targetIndexes = simpleIndices;
+          } else if (reportType === 'detailed') {
+            targetIndexes = detailedIndices;
+          } else {
+            const indicesSet = new Set<number>();
+            CUSTOM_COLUMN_DEFS.forEach(def => {
+              if (enabledCustomColumns[def.id]) {
+                parseExcelRange(def.letters).forEach(idx => indicesSet.add(idx));
+              }
+            });
+            targetIndexes = Array.from(indicesSet).sort((a, b) => a - b);
+            if (targetIndexes.length === 0) {
+              targetIndexes = simpleIndices;
+            }
+          }
           
           const filteredColumns = targetIndexes.map(idx => ({
             name: headers[idx] || `Col ${String.fromCharCode(65 + (idx % 26))}${idx >= 26 ? String.fromCharCode(65 + Math.floor(idx / 26) - 1) : ''}`,
@@ -233,7 +514,7 @@ export default function App() {
               return true;
             })
             .map(row => {
-              const rowObj: any = {};
+              const rowObj: any = { _rawRow: row };
               targetIndexes.forEach((colIdx, listIdx) => {
                 const headerName = filteredColumns[listIdx].name;
                 rowObj[headerName] = row[colIdx] || '';
@@ -243,66 +524,119 @@ export default function App() {
           
           setData(processedData);
           
-          if (searchKey || selectedGalaxy !== 'All') {
-            findRecord(processedData, filteredColumns, searchKey, selectedGalaxy);
-          }
-          setLoading(false);
+          findRecord(processedData, filteredColumns, searchKey, selectedGalaxy, selectedRegion, discovererName, surveyorName);
+          
+          const elapsed = Date.now() - startTime;
+          setTimeout(() => {
+            setLoading(false);
+            setSearchLoading(false);
+          }, Math.max(0, 1500 - elapsed));
         },
         error: (err: any) => {
           setError(`Parsing error: ${err.message}`);
-          setLoading(false);
+          const elapsed = Date.now() - startTime;
+          setTimeout(() => {
+            setLoading(false);
+            setSearchLoading(false);
+          }, Math.max(0, 1500 - elapsed));
         }
       });
     } catch (err: any) {
       setError(err.message || 'Operation failed');
-      setLoading(false);
+      const elapsed = Date.now() - startTime;
+      setTimeout(() => {
+        setLoading(false);
+        setSearchLoading(false);
+      }, Math.max(0, 1500 - elapsed));
     }
   };
 
-  const handleSearch = () => {
-    if (!data.length) {
-      fetchData();
-    } else {
-      findRecord(data, columns);
-    }
+  const handleSearch = async () => {
+    setSearchLoading(true);
+    await fetchData();
   };
 
-  const findRecord = (sourceData: any[], sourceCols: ColumnConfig[], civTerm?: string, galTerm?: string) => {
+  const findRecord = (
+    sourceData: any[], 
+    sourceCols: ColumnConfig[], 
+    civTerm?: string, 
+    galTerm?: string,
+    regionTerm?: string,
+    discTerm?: string,
+    survTerm?: string
+  ) => {
     const currentCivTerm = (civTerm ?? searchKey).trim().toLowerCase();
     const currentGalTerm = (galTerm ?? selectedGalaxy).trim().toLowerCase();
+    const currentRegionTerm = (regionTerm ?? selectedRegion).trim().toLowerCase();
+    const currentDiscTerm = (discTerm ?? discovererName).trim().toLowerCase();
+    const currentSurvTerm = (survTerm ?? surveyorName).trim().toLowerCase();
     
-    if (!currentCivTerm && currentGalTerm === 'all' && !sourceCols.length) return;
-
-    // Civilization search matches on Column S (index 18)
-    // Galaxy search matches on Column A (index 0)
-    const galaxyFieldName = sourceCols.find(c => c.rawIndex === 0)?.name;
-    const civFieldName = sourceCols.find(c => c.rawIndex === 18)?.name;
-    
-    if (!civFieldName || !galaxyFieldName) {
-      setMatchedRecords([]);
-      setError('Required matching fields (Column A or S) not found in the current report mode.');
-      return;
-    }
+    const getRawVal = (r: any, rawIdx: number) => {
+      if (r._rawRow) return String(r._rawRow[rawIdx] || '').trim();
+      const colMatch = sourceCols.find(c => c.rawIndex === rawIdx);
+      return colMatch ? String(r[colMatch.name] || '').trim() : '';
+    };
 
     const matches = sourceData.filter(row => {
-      const civMatch = currentCivTerm === 'all' || !currentCivTerm || 
-                      String(row[civFieldName] || '').toLowerCase().includes(currentCivTerm);
-      const galMatch = currentGalTerm === 'all' || 
-                      String(row[galaxyFieldName] || '').toLowerCase().includes(currentGalTerm);
-      return civMatch && galMatch;
+      const cVal = getRawVal(row, 18); // Civ
+      const gVal = getRawVal(row, 0);  // Galaxy
+      const rVal = getRawVal(row, 1);  // Region
+      const dVal = getRawVal(row, 11); // Discoverer
+      const kVal = getRawVal(row, 10); // Surveyor
+
+      // Civ matches: if currentCivTerm is ALL or empty, match all.
+      // IF currentCivTerm is 'none', match only empty fields.
+      // IF currentCivTerm is 'agt', treat as 'Alliance of Galactic Travellers'
+      let civMatch = false;
+      if (!currentCivTerm || currentCivTerm === 'all') {
+        civMatch = true;
+      } else if (currentCivTerm === 'none') {
+        civMatch = cVal === '';
+      } else {
+        const mappedTerm = currentCivTerm === 'agt' ? 'alliance of galactic travellers' : currentCivTerm;
+        civMatch = cVal.toLowerCase().includes(mappedTerm);
+      }
+
+      // Galaxy matches: if currentGalTerm is ALL or empty, match all
+      let galMatch = false;
+      if (!currentGalTerm || currentGalTerm === 'all') {
+        galMatch = true;
+      } else {
+        galMatch = gVal.toLowerCase().includes(currentGalTerm);
+      }
+
+      // Region matches: if currentRegionTerm is ALL or empty, match all
+      let regMatch = false;
+      if (!currentRegionTerm || currentRegionTerm === 'all') {
+        regMatch = true;
+      } else {
+        regMatch = rVal.toLowerCase().includes(currentRegionTerm);
+      }
+
+      // Discoverer matches: optional
+      let discMatch = true;
+      if (currentDiscTerm && currentDiscTerm !== 'all') {
+        discMatch = dVal.toLowerCase().includes(currentDiscTerm);
+      }
+
+      // Surveyor matches: optional
+      let survMatch = true;
+      if (currentSurvTerm && currentSurvTerm !== 'all') {
+        survMatch = kVal.toLowerCase().includes(currentSurvTerm);
+      }
+
+      return civMatch && galMatch && regMatch && discMatch && survMatch;
     });
 
-    // Sort by Column A (Galaxy/Region logic) then Column B
-    const nameFieldName = sourceCols.find(c => c.rawIndex === 1)?.name || sourceCols[1]?.name;
+    // Sort by Column A then Column B
     const sortedMatches = [...matches].sort((a, b) => {
-      const galA = String(a[galaxyFieldName] || '').toLowerCase();
-      const galB = String(b[galaxyFieldName] || '').toLowerCase();
-      
+      const galA = getRawVal(a, 0).toLowerCase();
+      const galB = getRawVal(b, 0).toLowerCase();
       if (galA !== galB) return galA.localeCompare(galB);
       
-      const nameA = String(a[nameFieldName] || '').toLowerCase();
-      const nameB = String(b[nameFieldName] || '').toLowerCase();
-      return nameA.localeCompare(nameB);
+      const regionA = getRawVal(a, 1).toLowerCase();
+      const regionB = getRawVal(b, 1).toLowerCase();
+      return regionA.localeCompare(regionB);
     });
 
     if (sortedMatches.length > 0) {
@@ -314,126 +648,338 @@ export default function App() {
     }
   };
 
+  const formatTimestamp = () => {
+    const now = new Date();
+    const pad = (num: number) => String(num).padStart(2, '0');
+    return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}_${pad(now.getMinutes())}_${pad(now.getSeconds())}`;
+  };
+
   const downloadFullReportPdf = () => {
-    if (matchedRecords.length === 0) return;
-
-    const doc = new jsPDF('l', 'mm', 'a4'); // Landscape for tables
-    const displayId = searchKey || 'Bulk';
-    
-    doc.setFontSize(22);
-    doc.text(`AGT System Report`, 20, 20);
-    
-    doc.setFontSize(10);
-    doc.text(`Extraction Ref: ${searchKey || 'All'} / ${selectedGalaxy}`, 20, 30);
-    doc.text(`Generated on: ${new Date().toLocaleString()}`, 20, 35);
-    doc.text(`Result Count: ${matchedRecords.length} Verified Entries`, 20, 40);
-
-    // Inject AGT Icon logo on Page 1, right of report summary introduction text
-    try {
-      const imgElements = document.getElementsByTagName('img');
-      let logoImg: HTMLImageElement | null = null;
-      for (let i = 0; i < imgElements.length; i++) {
-        if (imgElements[i].alt === 'AGT Logo') {
-          logoImg = imgElements[i];
-          break;
-        }
-      }
-      if (logoImg && logoImg.style.display !== 'none' && logoImg.complete) {
-        doc.addImage(logoImg, 'PNG', 240, 15, 25, 25);
-      } else {
-        const tempImg = new Image();
-        tempImg.src = logoUrl;
-        if (tempImg.complete) {
-          doc.addImage(tempImg, 'PNG', 240, 15, 25, 25);
-        }
-      }
-    } catch (err) {
-      console.warn('PDF image logo inject failed:', err);
-    }
+    if (sortedMatchedRecords.length === 0) return;
     
     const activeCols = columns.filter(col => col.enabled);
-    const urlMap = new Map<string, string>();
     
-    const tableData = matchedRecords.map((record, rIdx) => 
-      activeCols.map((col, cIdx) => {
-        const rawVal = record[col.name];
-        const val = getDisplayValue(rawVal, col.rawIndex);
-        
-        if (String(rawVal || '').startsWith('http')) {
-          urlMap.set(`${rIdx}-${cIdx}`, String(rawVal));
-          return 'LINK';
+    // Check if any row in the PDF will wrap into more than 3 lines.
+    // Spec: "If it is not possible to generate a PDF where all individual rows will now fit in 3 lines or less, then display pop up an error box..."
+    let exceedsThreeLines = false;
+    
+    if (activeCols.length > 13) {
+      exceedsThreeLines = true;
+    } else {
+      for (const record of sortedMatchedRecords) {
+        for (const col of activeCols) {
+          const val = getDisplayValue(record[col.name], col.rawIndex);
+          let colWidth = 257 / activeCols.length;
+          
+          if (col.rawIndex === 76) colWidth = 12;
+          else if (col.rawIndex === 7) colWidth = 24;
+          else if (col.rawIndex === 1) colWidth = 35;
+          else if (col.rawIndex === 14 || col.rawIndex === 15) colWidth = 18;
+          
+          const charLimit = Math.max(5, Math.floor(colWidth / 1.5));
+          const lines = Math.ceil((val || '').length / charLimit) || 1;
+          if (lines > 3) {
+            exceedsThreeLines = true;
+            break;
+          }
         }
-        return val || '-';
-      })
-    );
-
-    // Add total row to PDF
-    const countFieldName = columns[0]?.name;
-    const totalRow = activeCols.map(col => {
-      if (col.name === countFieldName) return `Count: ${matchedRecords.length}`;
-      return '';
-    });
-    tableData.push(totalRow);
-
-    autoTable(doc, {
-      startY: 50,
-      head: [activeCols.map(col => col.name)],
-      body: tableData,
-      theme: 'grid',
-      headStyles: { fillColor: [20, 20, 20], textColor: [255, 255, 255], fontSize: 8 },
-      bodyStyles: { fontSize: 8 },
-      footStyles: { fillColor: [240, 240, 240], textColor: [0, 0, 0], fontStyle: 'bold' },
-      margin: { top: 50, left: 20, right: 20 },
-      didParseCell: (data) => {
-        if (data.row.index === tableData.length - 1) {
-          data.cell.styles.fillColor = [220, 220, 220];
-          data.cell.styles.fontStyle = 'bold';
-        }
-        
-        const key = `${data.row.index}-${data.column.index}`;
-        if (urlMap.has(key)) {
-          data.cell.styles.textColor = [0, 0, 255];
-        }
-      },
-      didDrawCell: (data) => {
-        const key = `${data.row.index}-${data.column.index}`;
-        const url = urlMap.get(key);
-        if (url && data.section === 'body') {
-          doc.link(data.cell.x, data.cell.y, data.cell.width, data.cell.height, { url });
-        }
+        if (exceedsThreeLines) break;
       }
-    });
+    }
+    
+    if (exceedsThreeLines) {
+      setPdfErrorMsg("Too many columns for PDF report, reduce the column selections or choose CSV export");
+      return;
+    }
 
-    const filename = displayId.replace(/[^a-z0-9]/gi, '_');
-    doc.save(`agt_full_report_${filename}.pdf`);
+    setReportGeneratingLoading(true);
+
+    setTimeout(() => {
+      try {
+        const doc = new jsPDF('l', 'mm', 'a4'); // Landscape for tables
+
+        // --- 1. COVER PAGE (Page 1) ---
+        // Title in hex color FF0500 (RGB: 255, 5, 0), horizontally centered under AGTIcon
+        doc.setFont("Helvetica", "bold");
+        doc.setFontSize(26);
+        doc.setTextColor(255, 5, 0);
+        doc.text("AGT System Report", 148.5, 87, { align: 'center' });
+
+        // All other text on the cover page is black
+        doc.setFont("Helvetica", "normal");
+        doc.setTextColor(0, 0, 0);
+        doc.setFontSize(14);
+        
+        const formattedReportType = reportType === 'simple' ? 'Simple' : reportType === 'detailed' ? 'Detailed' : 'Custom';
+        doc.text(`Report Type: ${formattedReportType}`, 148.5, 102, { align: 'center' });
+
+        // Civilization translation rule
+        let civDisplay = searchKey || 'All';
+        if (civDisplay.trim().toLowerCase() === 'agt') {
+          civDisplay = 'Alliance of Galactic Travellers';
+        }
+
+        doc.setFontSize(11);
+        doc.text(`Civilization: ${civDisplay}`, 148.5, 115, { align: 'center' });
+        
+        // Combined Galaxy & Region filter criteria line
+        const galaxyVal = selectedGalaxy || 'All';
+        const regionVal = selectedRegion || 'All';
+        doc.text(`Galaxy: ${galaxyVal} / Region: ${regionVal}`, 148.5, 122, { align: 'center' });
+
+        // Discoverer & Surveyor line
+        const discVal = discovererName.trim() || 'All';
+        const survVal = surveyorName.trim() || 'All';
+        doc.text(`Discoverer: ${discVal} / Surveyor: ${survVal}`, 148.5, 129, { align: 'center' });
+
+        // Date of Report line
+        doc.text(`Date of Report: ${new Date().toLocaleString()}`, 148.5, 138, { align: 'center' });
+
+        // Result Count line
+        doc.text(`Result Count: ${matchedRecords.length} Verified Entries`, 148.5, 145, { align: 'center' });
+
+        // Top logo center image placement
+        try {
+          const imgElements = document.getElementsByTagName('img');
+          let logoImg: HTMLImageElement | null = null;
+          for (let i = 0; i < imgElements.length; i++) {
+            if (imgElements[i].alt === 'AGT Logo') {
+              logoImg = imgElements[i];
+              break;
+            }
+          }
+          if (logoImg && logoImg.complete) {
+            doc.addImage(logoImg, 'PNG', 133.5, 42, 30, 30);
+          } else {
+            const tempImg = new Image();
+            tempImg.src = logoUrl;
+            if (tempImg.complete) {
+              doc.addImage(tempImg, 'PNG', 133.5, 42, 30, 30);
+            }
+          }
+        } catch (err) {
+          console.warn('Cover page logo inject failed:', err);
+        }
+
+        // Star Systems Icon centering at bottom segment midpoint y=162.5
+        try {
+          const imgElements = document.getElementsByTagName('img');
+          let starImg: HTMLImageElement | null = null;
+          for (let i = 0; i < imgElements.length; i++) {
+            if (imgElements[i].alt === 'Star Systems') {
+              starImg = imgElements[i];
+              break;
+            }
+          }
+          if (starImg && starImg.complete) {
+            doc.addImage(starImg, 'PNG', 133.5, 162.5, 30, 30);
+          } else {
+            const tempImg = new Image();
+            tempImg.src = starSystemsIcon;
+            if (tempImg.complete) {
+              doc.addImage(tempImg, 'PNG', 133.5, 162.5, 30, 30);
+            }
+          }
+        } catch (err) {
+          console.warn('Cover page star logo inject failed:', err);
+        }
+
+        // --- 2. ADD PAGE 2 (TABLE DATA) ---
+        doc.addPage();
+
+        const urlMap = new Map<string, string>();
+        const tableData = sortedMatchedRecords.map((record, rIdx) => 
+          activeCols.map((col, cIdx) => {
+            const rawVal = record[col.name];
+            const val = getDisplayValue(rawVal, col.rawIndex);
+            
+            const isUrl = (col.rawIndex >= 76 && col.rawIndex <= 80) || String(rawVal || '').trim().startsWith('http');
+            if (isUrl && rawVal) {
+              urlMap.set(`${rIdx}-${cIdx}`, String(rawVal).trim());
+              return 'LINK';
+            }
+            return val || '-';
+          })
+        );
+
+        // Add total row to PDF
+        const countFieldName = columns[0]?.name;
+        const totalRow = activeCols.map(col => {
+          if (col.name === countFieldName) return `Count: ${sortedMatchedRecords.length}`;
+          return '';
+        });
+        tableData.push(totalRow);
+
+        // Compute Column Width overrides subject to rules:
+        // - Wiki (Col BY): slim width (10-12mm)
+        // - Region (Col B - Col 1): maximum 2 lines (custom styling width: 25mm)
+        // - Coordinate: maximum 1 line (width: 20mm, ellipsis overflow)
+        // - Discovery Date (index 14) and Surveyor Date (index 15): fit 1 line (width: 16mm)
+        // AND ensure the last column text field is not truncated in the produced reports, adjusting other column widths.
+        const lastColIdx = activeCols.length - 1;
+        const columnStyles: Record<number, any> = {};
+        
+        let allocatedWidth = 0;
+        
+        activeCols.forEach((col, idx) => {
+          if (idx === lastColIdx) {
+            // Last column: will be set precisely to remaining width and use linebreak overflow
+            columnStyles[idx] = { cellWidth: 'auto', overflow: 'linebreak' };
+          } else {
+            if (col.rawIndex === 76) {
+              columnStyles[idx] = { cellWidth: 10, overflow: 'ellipsize' };
+              allocatedWidth += 10;
+            } else if (col.rawIndex === 7) {
+              columnStyles[idx] = { cellWidth: 20, overflow: 'ellipsize' };
+              allocatedWidth += 20;
+            } else if (col.rawIndex === 1) {
+              columnStyles[idx] = { cellWidth: 25, overflow: 'ellipsize' };
+              allocatedWidth += 25;
+            } else if (col.rawIndex === 14 || col.rawIndex === 15) {
+              columnStyles[idx] = { cellWidth: 16, overflow: 'ellipsize' };
+              allocatedWidth += 16;
+            } else {
+              const qtyOtherStandardCols = activeCols.filter((c, i) => 
+                i !== lastColIdx && c.rawIndex !== 76 && c.rawIndex !== 7 && c.rawIndex !== 1 && c.rawIndex !== 14 && c.rawIndex !== 15
+              ).length || 1;
+              
+              const totalForOtherStandards = 257 - allocatedWidth - 45 - (activeCols.filter((c, i) => i !== lastColIdx && (c.rawIndex === 76 || c.rawIndex === 7 || c.rawIndex === 1 || c.rawIndex === 14 || c.rawIndex === 15)).length * 15);
+              const computedStandardColWidth = Math.max(12, Math.floor(totalForOtherStandards / qtyOtherStandardCols));
+              columnStyles[idx] = { cellWidth: computedStandardColWidth, overflow: 'ellipsize' };
+            }
+          }
+        });
+        
+        // Resolve reserved last column width beautifully
+        const reservedLastWidth = Math.max(45, 257 - activeCols.reduce((sum, col, idx) => {
+          if (idx === lastColIdx) return sum;
+          const cw = columnStyles[idx]?.cellWidth;
+          return sum + (typeof cw === 'number' ? cw : 15);
+        }, 0));
+        
+        columnStyles[lastColIdx] = { cellWidth: reservedLastWidth, overflow: 'linebreak' };
+
+        autoTable(doc, {
+          startY: 25,
+          head: [activeCols.map(col => {
+            if (col.rawIndex === 76) return "Wiki";
+            if (col.rawIndex === 10) return "Surveyor";
+            return col.name;
+          })],
+          body: tableData,
+          theme: 'grid',
+          columnStyles: columnStyles,
+          headStyles: { fillColor: [20, 20, 20], textColor: [255, 255, 255], fontSize: 8 },
+          bodyStyles: { fontSize: 8 },
+          footStyles: { fillColor: [240, 240, 240], textColor: [0, 0, 0], fontStyle: 'bold' },
+          margin: { top: 25, bottom: 20, left: 20, right: 20 },
+          didParseCell: (dataCell) => {
+            if (dataCell.row.index === tableData.length - 1) {
+              dataCell.cell.styles.fillColor = [220, 220, 220];
+              dataCell.cell.styles.fontStyle = 'bold';
+            }
+            
+            const cellKey = `${dataCell.row.index}-${dataCell.column.index}`;
+            if (urlMap.has(cellKey)) {
+              dataCell.cell.styles.textColor = [0, 0, 255];
+            }
+          },
+          didDrawCell: (dataCell) => {
+            const cellKey = `${dataCell.row.index}-${dataCell.column.index}`;
+            const url = urlMap.get(cellKey);
+            if (url && dataCell.section === 'body') {
+              doc.link(dataCell.cell.x, dataCell.cell.y, dataCell.cell.width, dataCell.cell.height, { url });
+            }
+          }
+        });
+
+        // --- 3. POST-PROCESS PAGES FOR HEADERS & FOOTERS (Page 2 onwards) ---
+        const totalPagesCount = doc.getNumberOfPages();
+        for (let i = 2; i <= totalPagesCount; i++) {
+          doc.setPage(i);
+          
+          // Header left justified: Small logo (10x10) and text
+          try {
+            const imgElements = document.getElementsByTagName('img');
+            let logoImg: HTMLImageElement | null = null;
+            for (let j = 0; j < imgElements.length; j++) {
+              if (imgElements[j].alt === 'AGT Logo') {
+                logoImg = imgElements[j];
+                break;
+              }
+            }
+            if (logoImg && logoImg.complete) {
+              doc.addImage(logoImg, 'PNG', 20, 10, 10, 10);
+            } else {
+              const tempImg = new Image();
+              tempImg.src = logoUrl;
+              if (tempImg.complete) {
+                doc.addImage(tempImg, 'PNG', 20, 10, 10, 10);
+              }
+            }
+          } catch (err) {
+            console.warn('Page header logo inject failed:', err);
+          }
+
+          doc.setFont("Helvetica", "bold");
+          doc.setFontSize(10);
+          doc.setTextColor(0, 0, 0);
+          doc.text("AGT System Report", 32, 16.5);
+
+          // Header right justified: Page number starting at 1 following cover page
+          doc.setFont("Helvetica", "normal");
+          doc.setFontSize(9);
+          doc.text(`Page ${i - 1}`, 277, 16.5, { align: 'right' });
+
+          // Footer left justified: Date of Report
+          doc.setFont("Helvetica", "normal");
+          doc.setFontSize(8);
+          doc.text(`Date of Report: ${new Date().toLocaleString()}`, 20, 202);
+        }
+
+        doc.save(`AGT  System Report - ${formatTimestamp()}.pdf`);
+      } catch (err) {
+        console.error('Error generating PDF:', err);
+      } finally {
+        setReportGeneratingLoading(false);
+      }
+    }, 400);
   };
 
   const downloadCsv = () => {
-    if (matchedRecords.length === 0) return;
-    
-    const activeCols = columns.filter(col => col.enabled);
-    const csvData = matchedRecords.map(record => {
-      const row: any = {};
-      activeCols.forEach(col => {
-        row[col.name] = getDisplayValue(record[col.name], col.rawIndex);
-      });
-      return row;
-    });
-    
-    const csv = Papa.unparse(csvData);
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-    const link = document.createElement('a');
-    const displayId = (searchKey || 'Bulk').replace(/[^a-z0-9]/gi, '_');
-    
-    if (link.download !== undefined) {
-      const url = URL.createObjectURL(blob);
-      link.setAttribute('href', url);
-      link.setAttribute('download', `agt_${reportType}_report_${displayId}.csv`);
-      link.style.visibility = 'hidden';
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-    }
+    if (sortedMatchedRecords.length === 0) return;
+    setReportGeneratingLoading(true);
+
+    setTimeout(() => {
+      try {
+        const activeCols = columns.filter(col => col.enabled);
+        const csvData = sortedMatchedRecords.map(record => {
+          const row: any = {};
+          activeCols.forEach(col => {
+            row[col.name] = getDisplayValue(record[col.name], col.rawIndex);
+          });
+          return row;
+        });
+        
+        const csv = Papa.unparse(csvData);
+        const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+        const link = document.createElement('a');
+        
+        if (link.download !== undefined) {
+          const url = URL.createObjectURL(blob);
+          link.setAttribute('href', url);
+          link.setAttribute('download', `AGT  System CSV Export- ${formatTimestamp()}.csv`);
+          link.style.visibility = 'hidden';
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+        }
+      } catch (err) {
+        console.error('Error generating CSV:', err);
+      } finally {
+        setReportGeneratingLoading(false);
+      }
+    }, 400);
   };
 
   const toggleColumn = (name: string) => {
@@ -442,25 +988,117 @@ export default function App() {
 
   const activeColumnsCount = useMemo(() => columns.filter(c => c.enabled).length, [columns]);
 
+  const sortedMatchedRecords = useMemo(() => {
+    if (!sortColumn || !sortDirection) return matchedRecords;
+    
+    return [...matchedRecords].sort((a, b) => {
+      const valA = a[sortColumn];
+      const valB = b[sortColumn];
+      
+      if (valA === undefined || valB === undefined) return 0;
+      
+      const strA = String(valA || '').trim();
+      const strB = String(valB || '').trim();
+      
+      // Try numeric sort
+      const cleanA = strA.replace(/[$,%]/g, '');
+      const cleanB = strB.replace(/[$,%]/g, '');
+      const numA = parseFloat(cleanA);
+      const numB = parseFloat(cleanB);
+      
+      const isNumA = !isNaN(numA) && isFinite(numA) && cleanA !== '';
+      const isNumB = !isNaN(numB) && isFinite(numB) && cleanB !== '';
+      
+      if (isNumA && isNumB) {
+        return sortDirection === 'asc' ? numA - numB : numB - numA;
+      }
+      
+      return sortDirection === 'asc'
+        ? strA.localeCompare(strB, undefined, { numeric: true, sensitivity: 'base' })
+        : strB.localeCompare(strA, undefined, { numeric: true, sensitivity: 'base' });
+    });
+  }, [matchedRecords, sortColumn, sortDirection]);
+
   const totalPoints = useMemo(() => {
-    return matchedRecords.length;
-  }, [matchedRecords]);
+    return sortedMatchedRecords.length;
+  }, [sortedMatchedRecords]);
 
   const totalPages = useMemo(() => {
-    return Math.ceil(matchedRecords.length / pageSize);
-  }, [matchedRecords.length, pageSize]);
+    return Math.ceil(sortedMatchedRecords.length / pageSize);
+  }, [sortedMatchedRecords.length, pageSize]);
 
   const paginatedRecords = useMemo(() => {
     const startIdx = (currentPage - 1) * pageSize;
-    return matchedRecords.slice(startIdx, startIdx + pageSize);
-  }, [matchedRecords, currentPage, pageSize]);
+    return sortedMatchedRecords.slice(startIdx, startIdx + pageSize);
+  }, [sortedMatchedRecords, currentPage, pageSize]);
+
+  const multiplier = parseFloat(fontScale.replace('x', '')) || 1.0;
 
   return (
     <div 
       onMouseDown={handleManualPlay}
       onTouchStart={handleManualPlay}
-      className="min-h-screen bg-[#0a0a0a] text-agt-orange font-sans selection:bg-agt-orange selection:text-black"
+      className={`min-h-screen bg-[#0a0a0a] text-agt-orange font-sans selection:bg-agt-orange selection:text-black ${fontScale !== '1x' ? 'font-scale-active' : ''}`}
     >
+      {/* Dynamic Font Scale Injector */}
+      <style>{`
+        .font-scale-active .text-\\[7px\\] { font-size: calc(7px * ${multiplier}) !important; }
+        .font-scale-active .text-\\[8px\\] { font-size: calc(8px * ${multiplier}) !important; }
+        .font-scale-active .text-\\[9px\\] { font-size: calc(9px * ${multiplier}) !important; }
+        .font-scale-active .text-\\[10px\\] { font-size: calc(10px * ${multiplier}) !important; }
+        .font-scale-active .text-\\[11px\\] { font-size: calc(11px * ${multiplier}) !important; }
+        .font-scale-active .text-xs { font-size: calc(12px * ${multiplier}) !important; }
+        .font-scale-active .text-sm { font-size: calc(14px * ${multiplier}) !important; }
+        .font-scale-active .text-base { font-size: calc(16px * ${multiplier}) !important; }
+        .font-scale-active .text-md { font-size: calc(16px * ${multiplier}) !important; }
+        .font-scale-active .text-lg { font-size: calc(18px * ${multiplier}) !important; }
+        .font-scale-active .text-xl { font-size: calc(20px * ${multiplier}) !important; }
+        .font-scale-active .text-2xl { font-size: calc(24px * ${multiplier}) !important; }
+        .font-scale-active .text-3xl { font-size: calc(30px * ${multiplier}) !important; }
+        .font-scale-active .text-4xl { font-size: calc(36px * ${multiplier}) !important; }
+        .font-scale-active .text-5xl { font-size: calc(48px * ${multiplier}) !important; }
+        .font-scale-active .text-6xl { font-size: calc(60px * ${multiplier}) !important; }
+        
+        .font-scale-active input, 
+        .font-scale-active select, 
+        .font-scale-active textarea, 
+        .font-scale-active button { 
+          font-size: calc(100% * ${multiplier}) !important; 
+        }
+      `}</style>
+
+      {/* Horizontally spinning logo processing overlay */}
+      <AnimatePresence>
+        {(searchLoading || reportGeneratingLoading) && (
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[200] bg-black/95 flex flex-col items-center justify-center p-6 text-center select-none"
+          >
+            <div className="relative w-48 h-48 flex items-center justify-center mb-8">
+              {/* Outer orbit circle */}
+              <div className="absolute inset-0 rounded-full border border-[#FF0500]/20 animate-pulse"></div>
+              
+              {/* Horizontally rotating logo img */}
+              <motion.img 
+                src="/AGTIcon.png" 
+                alt="AGT Logo" 
+                className="w-36 h-36 object-contain"
+                animate={{ rotateY: 360 }}
+                transition={{ repeat: Infinity, duration: 2, ease: "linear" }}
+              />
+            </div>
+            <h3 className="text-[#FFB451] text-lg font-bold uppercase tracking-[0.25em] mb-2 animate-pulse">
+              {reportGeneratingLoading ? t("Creating Report") : t("Searching AGT Galactic Archives")}
+            </h3>
+            <p className="text-[#FFB451]/50 text-xs font-mono uppercase tracking-[0.2em]">
+              {reportGeneratingLoading ? t("Compiling intelligence packet...") : t("Establishing high-speed subspace connection...")}
+            </p>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* Header */}
       <header className="border-b border-agt-orange/5 bg-black/40 backdrop-blur-md sticky top-0 z-50">
         <div className="max-w-5xl mx-auto px-6 h-20 flex items-center justify-between">
@@ -491,32 +1129,35 @@ export default function App() {
               )}
             </div>
             <div className="flex flex-col">
-              <h1 className="font-bold text-xs tracking-[0.2em] uppercase text-agt-orange">Alliance of Galactic Travellers</h1>
-              <span className="text-[9px] text-agt-orange uppercase tracking-[0.3em] font-bold">AGT System Report Tool</span>
+              <h1 className="font-bold text-xs tracking-[0.2em] uppercase text-agt-orange">{t("Alliance of Galactic Travellers")}</h1>
+              <span className="text-[9px] text-agt-orange uppercase tracking-[0.3em] font-bold">{t("AGT System Report Tool")}</span>
             </div>
           </div>
           
           <div className="flex items-center gap-6">
             <div className="hidden md:block text-[9px] text-agt-orange/30 tracking-widest font-mono">
-              STATUS: <span className={
+              {t("STATUS: ")}<span className={
                 loading ? 'text-yellow-500' :
                 sheetUrl ? 'text-emerald-500' : 
                 'text-red-500'
               }>
-                {loading ? 'SYNCING' : sheetUrl ? 'CONNECTED' : 'DISCONNECTED'}
+                {loading ? t('SYNCING') : sheetUrl ? t('CONNECTED') : t('DISCONNECTED')}
               </span>
             </div>
-            <button 
+            <motion.button 
               onClick={() => setShowSettings(!showSettings)}
-              className="p-2 hover:bg-agt-orange/5 rounded-lg transition-colors relative group"
+              className="p-2 hover:bg-[#FF0500]/5 rounded-lg transition-colors relative group text-[#FF0500]"
               title="Settings"
               id="settings-btn"
+              whileHover={{ rotate: 180 }}
+              transition={{ duration: 0.3 }}
+              whileTap={{ scale: 0.9, rotate: -90 }}
             >
-              <Settings className={`w-5 h-5 transition-transform duration-300 ${showSettings ? 'text-agt-orange rotate-90' : 'text-agt-orange group-hover:text-agt-orange'}`} />
+              <Settings className="w-5 h-5" />
               {!sheetUrl && (
-                <span className="absolute top-0 right-0 w-1.5 h-1.5 bg-agt-orange rounded-full shadow-[0_0_5px_rgba(255,180,81,0.5)]"></span>
+                <span className="absolute top-0 right-0 w-1.5 h-1.5 bg-[#FF0500] rounded-full shadow-[0_0_5px_rgba(255,5,0,0.5)]"></span>
               )}
-            </button>
+            </motion.button>
           </div>
         </div>
       </header>
@@ -526,144 +1167,218 @@ export default function App() {
           
           {/* Main Search Logic Container - centered aesthetic */}
           <div className="flex flex-col items-center space-y-12">
-            <div className="w-full max-w-xl text-center space-y-4">
-              <h2 className="text-4xl font-light tracking-tight text-agt-orange">AGT System Report Tool</h2>
+            <div className="w-full max-w-xl text-center space-y-6 flex flex-col items-center">
+              <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
+                <img 
+                  src={starSystemsIcon} 
+                  alt="Star Systems" 
+                  className="w-12 h-12 object-contain" 
+                  id="star-systems-icon-img"
+                />
+                <h2 className="text-4xl font-light tracking-tight text-[#FFB451]" id="main-title">
+                  {t("AGT System Report Tool")}
+                </h2>
+              </div>
               
               {/* Report Mode Selector */}
-              <div className="flex justify-center mb-8">
-                <div className="inline-flex p-1 bg-agt-orange/5 border border-agt-orange/20 rounded-xl">
-                  <button
-                    onClick={() => {
-                      setReportType('simple');
-                      setData([]);
-                      setMatchedRecords([]);
-                    }}
-                    className={`px-6 py-2 rounded-lg text-[10px] uppercase tracking-widest font-bold transition-all ${
-                      reportType === 'simple' 
-                        ? 'bg-agt-orange text-black shadow-lg' 
-                        : 'text-agt-orange hover:bg-agt-orange/10'
-                    }`}
-                  >
-                    Simple Report
-                  </button>
-                  <button
-                    onClick={() => {
-                      setReportType('detailed');
-                      setData([]);
-                      setMatchedRecords([]);
-                    }}
-                    className={`px-6 py-2 rounded-lg text-[10px] uppercase tracking-widest font-bold transition-all ${
-                      reportType === 'detailed' 
-                        ? 'bg-agt-orange text-black shadow-lg' 
-                        : 'text-agt-orange hover:bg-agt-orange/10'
-                    }`}
-                  >
-                    Detailed Report
-                  </button>
+              <div className="flex justify-center mb-4">
+                <div className="inline-flex p-1.5 bg-[#161616] border-2 border-[#FF0500] rounded-xl gap-1">
+                  {(['simple', 'detailed', 'custom'] as const).map((type) => {
+                    const isActive = reportType === type;
+                    const reportLabels: Record<typeof type, string> = {
+                      simple: 'Simple Report',
+                      detailed: 'Detailed Report',
+                      custom: 'Custom Report'
+                    };
+                    return (
+                      <button
+                        key={type}
+                        onClick={() => {
+                          setReportType(type);
+                          setData([]);
+                          setMatchedRecords([]);
+                        }}
+                        className={`px-5 py-2.5 rounded-lg text-[10px] uppercase tracking-widest font-black transition-all ${
+                          isActive 
+                            ? 'bg-[#E25530] text-white shadow-[0_0_15px_rgba(226,85,48,0.6)] border border-white/20 scale-102' 
+                            : 'bg-[#E25530]/30 text-white/70 hover:bg-[#E25530]/60 hover:text-white'
+                        }`}
+                        id={`report-mode-${type}`}
+                      >
+                        {t(reportLabels[type])}
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
 
-              <div className="flex flex-col md:flex-row items-center justify-center gap-4">
+              <div className="flex flex-wrap items-center justify-center gap-4 text-center">
                 <div className="space-y-1">
-                  <p className="text-agt-orange text-[10px] font-bold tracking-widest uppercase">Criteria 1</p>
-                  <p className="text-agt-orange text-xs font-bold tracking-widest uppercase">Select Civilization</p>
+                  <p className="text-[#FFB451] text-[10px] font-bold tracking-widest uppercase">{t("Criteria 1")}</p>
+                  <p className="text-[#FFB451] text-xs font-bold tracking-widest uppercase">{t("Select Civilization")}</p>
                 </div>
-                <div className="h-px w-8 bg-agt-orange/20 hidden md:block mt-4"></div>
+                <div className="h-px w-6 bg-[#FF0500]/20 hidden md:block mt-4"></div>
                 <div className="space-y-1">
-                  <p className="text-agt-orange text-[10px] font-bold tracking-widest uppercase">Criteria 2</p>
-                  <p className="text-agt-orange text-xs font-bold tracking-widest uppercase">Preferred Galaxy</p>
+                  <p className="text-[#FFB451] text-[10px] font-bold tracking-widest uppercase">{t("Criteria 2")}</p>
+                  <p className="text-[#FFB451] text-xs font-bold tracking-widest uppercase">{t("Preferred Galaxy")}</p>
+                </div>
+                <div className="h-px w-6 bg-[#FF0500]/20 hidden md:block mt-4"></div>
+                <div className="space-y-1">
+                  <p className="text-[#FFB451] text-[10px] font-bold tracking-widest uppercase">{t("Criteria 3")}</p>
+                  <p className="text-[#FFB451] text-xs font-bold tracking-widest uppercase">{t("Preferred Region")}</p>
+                </div>
+                <div className="h-px w-6 bg-[#FF0500]/20 hidden md:block mt-4"></div>
+                <div className="space-y-1">
+                  <p className="text-[#FFB451] text-[10px] font-bold tracking-widest uppercase opacity-75">{t("Criteria 4 (Opt)")}</p>
+                  <p className="text-[#FFB451] text-xs font-bold tracking-widest uppercase opacity-75 font-bold">{t("Discoverer Name")}</p>
+                </div>
+                <div className="h-px w-6 bg-[#FF0500]/20 hidden md:block mt-4"></div>
+                <div className="space-y-1">
+                  <p className="text-[#FFB451] text-[10px] font-bold tracking-widest uppercase opacity-75">{t("Criteria 5 (Opt)")}</p>
+                  <p className="text-[#FFB451] text-xs font-bold tracking-widest uppercase opacity-75 font-bold">{t("Surveyor Name")}</p>
                 </div>
               </div>
             </div>
 
-            <div className="w-full max-w-4xl grid grid-cols-1 md:grid-cols-2 gap-6">
-              {/* Civilization Dropdown */}
-              <div className="relative group">
-                <div className="absolute inset-y-0 left-0 pl-6 flex items-center pointer-events-none text-agt-orange group-focus-within:text-agt-orange transition-colors">
-                  <Search className="h-5 w-5" />
+            <div className="w-full max-w-4xl space-y-6">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-6 items-start">
+                {/* Civilization Autocomplete */}
+                <div className="space-y-2">
+                  <AutocompleteInput
+                    id="civilization-select"
+                    value={searchKey}
+                    onChange={(val) => {
+                      setSearchKey(val);
+                      if (data.length) {
+                        findRecord(data, columns, val, selectedGalaxy, selectedRegion, discovererName, surveyorName);
+                      }
+                    }}
+                    suggestions={civSuggestions}
+                    placeholder={t("Enter/Choose Civilization...")}
+                    icon={<Search className="h-5 w-5" />}
+                  />
                 </div>
-                <select
-                  value={searchKey}
-                  onChange={(e) => {
-                    const val = e.target.value;
-                    setSearchKey(val);
-                    if (data.length) {
-                      findRecord(data, columns, val, selectedGalaxy);
-                    } else {
-                      fetchData();
-                    }
-                  }}
-                  className="block w-full pl-14 pr-12 py-5 bg-[#1d1d1d] border-2 border-agt-orange rounded-full text-lg font-mono tracking-wider focus:outline-none focus:ring-2 focus:ring-agt-orange focus:border-agt-orange transition-all input-glow text-agt-orange appearance-none shadow-[0_0_30px_rgba(255,180,81,0.05)]"
-                  id="civilization-select"
-                >
-                  <option value="" disabled className="bg-[#1d1d1d]">-- Choose Civilization --</option>
-                  <option value="All" className="bg-[#1d1d1d]">All</option>
-                  {CIVILIZATIONS.map(civ => (
-                    <option key={civ} value={civ} className="bg-[#1d1d1d]">{civ}</option>
-                  ))}
-                </select>
-                <div className="absolute right-4 inset-y-0 flex items-center pointer-events-none text-agt-orange">
-                  <ChevronRight className="w-5 h-5 rotate-90" />
+
+                {/* Galaxy Autocomplete */}
+                <div className="space-y-2">
+                  <AutocompleteInput
+                    id="galaxy-select"
+                    value={selectedGalaxy}
+                    onChange={(val) => {
+                      setSelectedGalaxy(val);
+                      if (data.length) {
+                        findRecord(data, columns, searchKey, val, selectedRegion, discovererName, surveyorName);
+                      }
+                    }}
+                    suggestions={galaxySuggestions}
+                    placeholder={t("Enter/Choose Galaxy...")}
+                    icon={<Globe className="h-5 w-5" />}
+                  />
+                  <div className="mt-1 ml-4 text-center md:text-left">
+                    <a 
+                      href="https://nomanssky.fandom.com/wiki/Galaxy" 
+                      target="_blank" 
+                      rel="noopener noreferrer"
+                      className="text-[9px] text-[#FFB451]/50 hover:text-[#FFB451] underline transition-colors font-mono uppercase"
+                    >
+                      {t("Galaxy Directory")}
+                    </a>
+                  </div>
+                </div>
+
+                {/* Region Autocomplete */}
+                <div className="space-y-2">
+                  <AutocompleteInput
+                    id="region-select"
+                    value={selectedRegion}
+                    onChange={(val) => {
+                      setSelectedRegion(val);
+                      if (data.length) {
+                        findRecord(data, columns, searchKey, selectedGalaxy, val, discovererName, surveyorName);
+                      }
+                    }}
+                    suggestions={regionSuggestions}
+                    placeholder={t("Enter/Choose Region...")}
+                    icon={<Search className="h-5 w-5" />}
+                  />
                 </div>
               </div>
 
-              {/* Galaxy Search */}
-              <div className="relative group">
-                <div className="absolute inset-y-0 left-0 pl-6 flex items-center pointer-events-none text-agt-orange group-focus-within:text-agt-orange transition-colors">
-                  <Globe className="h-5 w-5" />
+              {/* Optional discoverer & surveyor rows */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-start w-full max-w-2xl mx-auto">
+                {/* Discoverer Autocomplete (Optional) */}
+                <div className="space-y-2">
+                  <AutocompleteInput
+                    id="discoverer-select"
+                    value={discovererName}
+                    onChange={(val) => {
+                      setDiscovererName(val);
+                      if (data.length) {
+                        findRecord(data, columns, searchKey, selectedGalaxy, selectedRegion, val, surveyorName);
+                      }
+                    }}
+                    suggestions={discovererSuggestions}
+                    placeholder={t("Discoverer Name")}
+                    icon={<Search className="h-5 w-5" />}
+                  />
                 </div>
-                <input
-                  value={selectedGalaxy}
-                  placeholder="Enter Galaxy..."
-                  onChange={(e) => {
-                    const val = e.target.value;
-                    setSelectedGalaxy(val);
-                    if (data.length) {
-                      findRecord(data, columns, searchKey, val);
-                    }
-                  }}
-                  className="block w-full pl-14 pr-12 py-5 bg-[#1d1d1d] border-2 border-agt-orange rounded-full text-lg font-mono tracking-wider focus:outline-none focus:ring-2 focus:ring-agt-orange focus:border-agt-orange transition-all input-glow text-agt-orange shadow-[0_0_30px_rgba(255,180,81,0.05)]"
-                  id="galaxy-select"
-                />
-                <div className="mt-2 ml-6">
-                  <a 
-                    href="https://nomanssky.fandom.com/wiki/Galaxy" 
-                    target="_blank" 
-                    rel="noopener noreferrer"
-                    className="text-[10px] text-agt-orange/60 hover:text-agt-orange underline transition-colors"
-                  >
-                    Find galaxy names here
-                  </a>
+
+                {/* Surveyor Autocomplete (Optional) */}
+                <div className="space-y-2">
+                  <AutocompleteInput
+                    id="surveyor-select"
+                    value={surveyorName}
+                    onChange={(val) => {
+                      setSurveyorName(val);
+                      if (data.length) {
+                        findRecord(data, columns, searchKey, selectedGalaxy, selectedRegion, discovererName, val);
+                      }
+                    }}
+                    suggestions={surveyorSuggestions}
+                    placeholder={t("Surveyor Name")}
+                    icon={<Search className="h-5 w-5" />}
+                  />
                 </div>
               </div>
             </div>
 
-            <button
-              onClick={handleSearch}
-              disabled={loading || (!searchKey && selectedGalaxy === 'All')}
-              className="px-20 py-5 border-2 border-agt-orange bg-transparent text-agt-orange rounded-full font-black text-sm uppercase tracking-[0.2em] hover:bg-agt-orange/10 active:scale-[0.96] disabled:opacity-25 disabled:pointer-events-none shadow-[0_4px_15px_rgba(0,0,0,0.3)] hover:shadow-[0_0_20px_rgba(255,180,81,0.4)] transition-all flex flex-col items-center gap-2"
-              id="fetch-btn"
-            >
-              {loading ? (
-                <>
-                  <RefreshCw className="w-5 h-5 animate-spin" />
-                  <span className="text-[10px] tracking-[0.1em] mt-1">Data Access in Process - Please Wait</span>
-                </>
-              ) : (
-                <>
-                  <RefreshCw className="w-5 h-5" />
-                  <span>Extract Reports</span>
-                </>
-              )}
-            </button>
+            <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
+              <button
+                onClick={handleSearch}
+                disabled={loading}
+                className="px-20 py-5 bg-[#E25530] border-2 border-[#FF0500] text-white rounded-full font-black text-sm uppercase tracking-[0.2em] hover:bg-[#E25530]/90 active:scale-[0.96] disabled:opacity-20 disabled:pointer-events-none shadow-[0_4px_15px_rgba(0,0,0,0.3)] hover:shadow-[0_0_20px_rgba(255,5,0,0.3)] transition-all flex items-center justify-center gap-2 shrink-0"
+                id="fetch-btn"
+              >
+                <RefreshCw className={`w-5 h-5 ${loading ? 'animate-spin' : ''}`} />
+                <span>{t("Extract Reports")}</span>
+              </button>
+
+              <button
+                onClick={() => {
+                  setSearchKey('All');
+                  setSelectedGalaxy('All');
+                  setSelectedRegion('All');
+                  setDiscovererName('');
+                  setSurveyorName('');
+                  if (data.length) {
+                    findRecord(data, columns, 'All', 'All', 'All', '', '');
+                  }
+                }}
+                className="px-6 py-3.5 border border-[#FF0500]/40 bg-[#FF0500]/10 text-[#FFB451] hover:bg-[#FF0500]/20 rounded-full text-[10px] uppercase tracking-widest font-bold transition-all active:scale-[0.95] flex items-center gap-2 shadow-[0_4px_10px_rgba(255,5,0,0.05)]"
+                id="clear-all-filters-btn"
+                title={t("Clear All Filters")}
+              >
+                <span>{t("Clear All Filters")}</span>
+              </button>
+            </div>
 
             {error && (
               <motion.div 
                 initial={{ opacity: 0, scale: 0.95 }}
                 animate={{ opacity: 1, scale: 1 }}
-                className="flex items-center gap-3 px-6 py-3 bg-agt-orange/5 border border-agt-orange text-agt-orange rounded-full text-xs font-medium tracking-wide"
+                className="flex items-center gap-3 px-6 py-3 bg-[#FF0500]/5 border border-[#FF0500] text-[#FFB451] rounded-full text-xs font-medium tracking-wide shadow-[0_0_15px_rgba(255,5,0,0.05)]"
               >
-                <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                <AlertCircle className="w-3.5 h-3.5 shrink-0 text-[#FF0500]" />
                 <p>{error}</p>
               </motion.div>
             )}
@@ -671,87 +1386,214 @@ export default function App() {
 
           <div className="space-y-12">
             
-            {/* Settings Area - Full Width Toggleable */}
+            {/* Settings Area - Beautiful pop-up window overlay */}
             <AnimatePresence>
               {showSettings && (
-                <motion.div 
-                  initial={{ height: 0, opacity: 0 }}
-                  animate={{ height: 'auto', opacity: 1 }}
-                  exit={{ height: 0, opacity: 0 }}
-                  className="overflow-hidden bg-[#161616] border border-agt-orange/5 rounded-2xl"
-                >
-                    <div className="p-8 grid grid-cols-1 md:grid-cols-2 gap-12">
-                    {/* Data Section */}
-                    <div className="space-y-4">
-                      <h3 className="text-[10px] uppercase tracking-widest font-bold text-agt-orange flex items-center gap-2">
-                        <Database className="w-3 h-3" />
-                        Source Identity
-                      </h3>
-                      <div className="space-y-4">
-                        <button 
-                          onClick={fetchData}
-                          className="w-full py-4 bg-agt-orange/5 border border-agt-orange text-agt-orange rounded-xl text-[10px] uppercase tracking-widest font-bold hover:bg-agt-orange/10 transition-colors"
-                        >
-                          Re-sync Point Log Source
-                        </button>
+                <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/85 backdrop-blur-sm">
+                  <div className="absolute inset-0" onClick={() => setShowSettings(false)} />
+                  
+                  <motion.div 
+                    initial={{ scale: 0.95, opacity: 0 }}
+                    animate={{ scale: 1, opacity: 1 }}
+                    exit={{ scale: 0.95, opacity: 0 }}
+                    className="w-full max-w-4xl max-h-[85vh] bg-[#111111] border-2 border-[#FF0500] rounded-2xl flex flex-col overflow-hidden relative shadow-[0_0_50px_rgba(255,5,0,0.25)]"
+                    id="settings-popup-window"
+                  >
+                    {/* Header */}
+                    <div className="p-6 border-b border-[#FF0500] bg-[#161616] flex items-center justify-between shrink-0">
+                      <div className="flex items-center gap-2">
+                        <Settings className="w-5 h-5 text-[#FF0500] animate-[spin_5s_linear_infinite]" />
+                        <h2 className="text-md font-bold uppercase tracking-[0.2em] text-white">{t("System Settings Console")}</h2>
                       </div>
+                      <button 
+                        onClick={() => setShowSettings(false)}
+                        className="px-5 py-2.5 bg-[#E25530] text-white border border-[#FF0500] rounded-xl text-[10px] font-bold uppercase tracking-widest hover:bg-[#E25530]/90 transition"
+                        id="settings-header-close"
+                      >
+                        {t("Close Settings")}
+                      </button>
                     </div>
 
-                    {/* Pagination Config Section */}
-                    <div className="space-y-4">
-                      <h3 className="text-[10px] uppercase tracking-widest font-bold text-agt-orange flex items-center gap-2">
-                        <FileText className="w-3 h-3" />
-                        Pagination Config
-                      </h3>
-                      <div className="space-y-2">
-                        <p className="text-[10px] text-agt-orange/60 uppercase tracking-widest font-bold">Default Records Displayed</p>
-                        <div className="flex gap-2">
-                          {[15, 30, 50, 100].map(size => {
-                            const isSelected = pageSize === size;
-                            return (
-                              <button
-                                key={size}
-                                onClick={() => setPageSize(size)}
-                                className={`flex-1 py-3 rounded-xl border text-xs font-mono font-bold transition-all ${
-                                  isSelected 
-                                    ? 'bg-agt-orange text-black border-agt-orange shadow-[0_0_15px_rgba(255,180,81,0.5)] scale-102' 
-                                    : 'bg-black/40 border-white/5 text-agt-orange hover:bg-agt-orange/5'
-                                }`}
-                                id={`pagesize-${size}-btn`}
-                              >
-                                {size}
-                              </button>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Audio Section */}
-                    <div className="col-span-1 md:col-span-2 pt-8 border-t border-white/5 space-y-4">
-                      <div className="flex items-center justify-between">
-                        <div className="space-y-1">
-                          <h3 className="text-[10px] uppercase tracking-widest font-bold text-agt-orange flex items-center gap-2">
-                            <Volume2 className="w-3 h-3" />
-                            Ambience Module
+                    {/* Scrollable Content */}
+                    <div className="p-8 overflow-y-auto flex-1 settings-scrollbar space-y-12 bg-[#0c0c0c]">
+                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-12">
+                        
+                        {/* Records Displayed Per Page Section */}
+                        <div className="space-y-4">
+                          <h3 className="text-[10px] uppercase tracking-widest font-bold text-[#FFB451] flex items-center gap-2">
+                            <FileText className="w-3 h-3" />
+                            {t("Records Displayed Per Page")}
                           </h3>
-                          <p className="text-[10px] text-agt-orange uppercase tracking-wider">Atmospheric Background Loop</p>
+                          <div className="space-y-2 relative">
+                            <select
+                              value={pageSize}
+                              onChange={(e) => setPageSize(parseInt(e.target.value, 10))}
+                              className="block w-full px-5 py-4 bg-[#1d1d1d] border border-[#FF0500] rounded-xl text-white font-mono text-xs focus:outline-none focus:ring-1 focus:ring-[#FF0500] appearance-none"
+                              id="pagesize-select"
+                            >
+                              {[15, 30, 50, 100].map(size => (
+                                <option key={size} value={size}>{size} {t("Records per Page")}</option>
+                              ))}
+                            </select>
+                            <div className="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none text-white/40">
+                              <ChevronRight className="w-4 h-4 rotate-90" />
+                            </div>
+                          </div>
                         </div>
-                        <button 
-                          onClick={() => setAudioEnabled(!audioEnabled)}
-                          className={`flex items-center gap-3 px-6 py-3 rounded-xl border transition-all text-[10px] uppercase tracking-widest font-bold ${
-                            audioEnabled 
-                              ? 'bg-agt-orange/10 border-agt-orange text-agt-orange' 
-                              : 'bg-black/40 border-white/5 text-agt-orange'
-                          }`}
-                        >
-                          {audioEnabled ? <Volume2 className="w-3.5 h-3.5" /> : <VolumeX className="w-3.5 h-3.5" />}
-                          {audioEnabled ? 'Active' : 'Muted'}
-                        </button>
+
+                        {/* Display Font Scale Section */}
+                        <div className="space-y-4">
+                          <h3 className="text-[10px] uppercase tracking-widest font-bold text-[#FFB451] flex items-center gap-2">
+                            <Table className="w-3 h-3" />
+                            {t("Display Font Scale")}
+                          </h3>
+                          <div className="space-y-2 relative">
+                            <select
+                              value={fontScale}
+                              onChange={(e) => setFontScale(e.target.value)}
+                              className="block w-full px-5 py-4 bg-[#1d1d1d] border border-[#FF0500] rounded-xl text-white font-mono text-xs focus:outline-none focus:ring-1 focus:ring-[#FF0500] appearance-none"
+                              id="fontscale-select"
+                            >
+                              {['1x', '1.5x', '2x', '2.5x', '3x'].map(scale => (
+                                <option key={scale} value={scale}>
+                                  {scale === '1x' ? t('1x (Default)') : scale}
+                                </option>
+                              ))}
+                            </select>
+                            <div className="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none text-white/40">
+                              <ChevronRight className="w-4 h-4 rotate-90" />
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Language Selection Section */}
+                        <div className="space-y-4">
+                          <h3 className="text-[10px] uppercase tracking-widest font-bold text-[#FFB451] flex items-center gap-2">
+                            <Globe className="w-3 h-3" />
+                            {t("Language Selection")}
+                          </h3>
+                          <div className="space-y-2 relative">
+                            <select
+                              value={language}
+                              onChange={(e) => setLanguage(e.target.value as LanguageCode)}
+                              className="block w-full px-5 py-4 bg-[#1d1d1d] border border-[#FF0500] rounded-xl text-white font-mono text-xs focus:outline-none focus:ring-1 focus:ring-[#FF0500] appearance-none"
+                              id="language-select"
+                            >
+                              {LANGUAGES.map(lang => (
+                                <option key={lang.code} value={lang.code}>
+                                  {lang.native}
+                                </option>
+                              ))}
+                            </select>
+                            <div className="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none text-white/40">
+                              <ChevronRight className="w-4 h-4 rotate-90" />
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* AGT Anthem (Audio Section) */}
+                        <div className="col-span-1 md:col-span-2 lg:col-span-3 pt-8 border-t border-[#FF0500]/20 space-y-4">
+                          <div className="flex items-center justify-between">
+                            <div className="space-y-1">
+                              <h3 className="text-[10px] uppercase tracking-widest font-bold text-[#FFB451] flex items-center gap-2">
+                                <Volume2 className="w-3 h-3" />
+                                {t("AGT Anthem")}
+                              </h3>
+                            </div>
+                            <button 
+                              onClick={() => setAudioEnabled(!audioEnabled)}
+                              className="flex items-center gap-3 px-6 py-3 rounded-xl border border-[#FF0500] bg-[#E25530] text-white transition-all text-[10px] uppercase tracking-widest font-bold hover:bg-[#E25530]/90"
+                              id="audio-toggle-btn"
+                            >
+                              {audioEnabled ? <Volume2 className="w-3.5 h-3.5" /> : <VolumeX className="w-3.5 h-3.5" />}
+                              {audioEnabled ? t('Active') : t('Muted')}
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Custom Report Columns Section */}
+                        <div className="col-span-1 md:col-span-2 lg:col-span-3 pt-8 border-t border-[#FF0500]/20 space-y-4">
+                          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                            <div className="space-y-1">
+                              <h3 className="text-[10px] uppercase tracking-widest font-bold text-[#FFB451] flex items-center gap-2">
+                                <Columns className="w-3 h-3" />
+                                {t("Custom Report Columns")}
+                              </h3>
+                              <p className="text-[10px] text-[#FFB451]/60 font-mono tracking-wide">{t("Toggle columns to appear in the new custom report format")}</p>
+                            </div>
+                            <button
+                              onClick={() => {
+                                const cleared: Record<string, boolean> = {};
+                                CUSTOM_COLUMN_DEFS.forEach(def => {
+                                  cleared[def.id] = false;
+                                });
+                                setEnabledCustomColumns(cleared);
+                              }}
+                              className="px-4 py-2 border border-[#FF0500] bg-[#E25530] text-white hover:bg-[#E25530]/90 rounded-lg text-[9px] uppercase font-black tracking-widest transition shadow-[0_2px_10px_rgba(226,85,48,0.2)] active:scale-95 self-start sm:self-center"
+                              id="clear-all-toggles-btn"
+                            >
+                              {t("Clear All")}
+                            </button>
+                          </div>
+                          <div className="grid grid-cols-4 sm:grid-cols-5 md:grid-cols-6 lg:grid-cols-8 gap-1 max-h-52 overflow-y-auto p-2 bg-black/40 border border-[#FF0500]/50 rounded-xl settings-scrollbar">
+                            {CUSTOM_COLUMN_DEFS.map(def => {
+                              const isEnabled = enabledCustomColumns[def.id];
+                              return (
+                                <button
+                                  key={def.id}
+                                  onClick={() => {
+                                    setEnabledCustomColumns(prev => ({
+                                      ...prev,
+                                      [def.id]: !prev[def.id]
+                                    }));
+                                  }}
+                                  className={`py-1 px-1.5 rounded transition-all flex items-center justify-between text-white border text-[7px] font-mono leading-none ${
+                                    isEnabled 
+                                      ? 'bg-[#E25530] border-[#FF0500] shadow-[0_0_5px_rgba(226,85,48,0.3)] font-extrabold' 
+                                      : 'bg-[#E25530]/5 border-[#FF0500]/15 opacity-40 hover:opacity-100'
+                                  }`}
+                                  id={`custom-col-${def.id}-btn`}
+                                  title={translateColumnHeader(def.label, language)}
+                                >
+                                  <span className="truncate mr-0.5 text-[7px] font-medium font-sans uppercase">{translateColumnHeader(def.label, language)}</span>
+                                  <span className="shrink-0 text-[6px] px-0.5 py-px rounded bg-black/40 text-white leading-none scale-90">
+                                    {isEnabled ? 'ON' : 'OFF'}
+                                  </span>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+
+                        {/* System Database Section at the bottom of the scrollable content */}
+                        <div className="col-span-1 md:col-span-2 lg:col-span-3 pt-8 border-t border-[#FF0500]/20 space-y-4">
+                          <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
+                            <div className="space-y-1">
+                              <h3 className="text-[10px] uppercase tracking-widest font-bold text-[#FFB451] flex items-center gap-2">
+                                <Database className="w-3 h-3" />
+                                {t("System Database Settings")}
+                              </h3>
+                              <p className="text-[10px] text-[#FFB451]/60 font-mono tracking-wide italic">
+                                {t("System database sync may take up to 5 minutes")}
+                              </p>
+                            </div>
+                            <button 
+                              onClick={() => {
+                                fetchData();
+                              }}
+                              className="w-full sm:w-auto px-8 py-3.5 bg-[#E25530] border border-[#FF0500] text-white rounded-xl text-[10px] uppercase tracking-[0.1em] font-semibold hover:bg-[#E25530]/90 transition-colors shadow-[0_4px_20px_rgba(226,85,48,0.2)] active:scale-[0.98]"
+                              id="resync-db-btn"
+                            >
+                              {t("Re-Sync System DB")}
+                            </button>
+                          </div>
+                        </div>
+
                       </div>
                     </div>
-                  </div>
-                </motion.div>
+
+                  </motion.div>
+                </div>
               )}
             </AnimatePresence>
 
@@ -764,68 +1606,117 @@ export default function App() {
                     initial={{ opacity: 0, y: 30 }}
                     animate={{ opacity: 1, y: 0 }}
                     exit={{ opacity: 0, scale: 0.98 }}
-                    className="glass-card rounded-2xl overflow-hidden"
+                    className="bg-[#111111] border-2 border-[#FF0500] rounded-2xl overflow-hidden shadow-[0_0_30px_rgba(255,5,0,0.15)]"
                   >
-                    <div className="p-8 border-b border-agt-orange/5 flex flex-col md:flex-row md:items-center justify-between gap-6">
+                    <div className="p-8 border-b border-[#FF0500]/20 flex flex-col md:flex-row md:items-center justify-between gap-6 bg-[#161616]">
                       <div className="space-y-1">
-                        <h3 className="text-xl font-medium text-agt-orange flex items-center gap-3">
-                          AGT Galactic Archives Results
-                          <span className="px-2 py-0.5 rounded-full bg-agt-orange/5 text-[10px] text-agt-orange border border-agt-orange font-mono">
-                            {matchedRecords.length} FOUND
+                        <h3 className="text-xl font-medium text-white flex items-center gap-3">
+                          {t("AGT Galactic Archives Results")}
+                          <span className="px-2 py-0.5 rounded-full bg-[#E25530]/10 text-white border border-[#FF0500]/40 font-mono text-[10px]">
+                            {matchedRecords.length} {t("FOUND")}
                           </span>
                         </h3>
-                        <p className="text-[10px] text-agt-orange uppercase tracking-[0.2em]">Verified Galactic Ledger Matches</p>
+                        <p className="text-[10px] text-white/60 uppercase tracking-[0.2em]">{t("Verified Galactic Ledger Matches")}</p>
                       </div>
-
+ 
                       <div className="flex flex-wrap items-center gap-3">
-                        {reportType === 'simple' && (
+                        {(reportType === 'simple' || reportType === 'custom') && (
                           <button
                             onClick={downloadFullReportPdf}
-                            className="flex items-center gap-3 px-8 py-4 border-2 border-agt-orange bg-transparent text-agt-orange hover:bg-agt-orange/10 rounded-xl text-[10px] uppercase tracking-[0.2em] font-bold transition-all shadow-[0_4px_20px_rgba(255,180,81,0.1)] active:scale-[0.98]"
+                            className="flex items-center gap-3 px-8 py-4 border border-[#FF0500] bg-[#E25530] text-white hover:bg-[#E25530]/90 rounded-xl text-[10px] uppercase tracking-[0.2em] font-black transition-all shadow-[0_4px_20px_rgba(226,85,48,0.2)] active:scale-[0.98]"
                           >
-                            <Download className="w-4 h-4" />
-                            <span>Export PDF</span>
+                            <Download className="w-4 h-4 text-white" />
+                            <span>{t("PDF Report")}</span>
                           </button>
                         )}
                         <button
                           onClick={downloadCsv}
-                          className="flex items-center gap-3 px-8 py-4 border-2 border-agt-orange bg-transparent text-agt-orange hover:bg-agt-orange/10 rounded-xl text-[10px] uppercase tracking-[0.2em] font-bold transition-all shadow-[0_4px_20px_rgba(255,180,81,0.1)] active:scale-[0.98]"
+                          className="flex items-center gap-3 px-8 py-4 border border-[#FF0500] bg-[#E25530] text-white hover:bg-[#E25530]/90 rounded-xl text-[10px] uppercase tracking-[0.2em] font-black transition-all shadow-[0_4px_20px_rgba(226,85,48,0.2)] active:scale-[0.98]"
                         >
-                          <Table className="w-4 h-4" />
-                          <span>Export CSV</span>
+                          <Table className="w-4 h-4 text-white" />
+                          <span>{t("Export CSV")}</span>
                         </button>
                       </div>
                     </div>
-
-                    <div className="overflow-x-auto custom-scrollbar">
-                      <table className="w-full text-left border-collapse">
-                        <thead>
-                          <tr className="bg-agt-orange/[0.02] border-b border-agt-orange/5">
-                            {columns.filter(col => col.enabled).map((col, idx) => (
-                              <th key={idx} className="p-4 text-[9px] uppercase tracking-widest font-bold text-agt-orange whitespace-nowrap">
-                                {col.name}
-                              </th>
-                            ))}
+ 
+                    <div className="overflow-x-auto max-h-[500px] overflow-y-auto custom-scrollbar">
+                      <table className="w-full text-left border-collapse relative">
+                        <thead className="sticky top-0 z-10 bg-[#1c1c1c] shadow-[0_1px_0_rgba(255,5,0,0.15)]">
+                          <tr className="bg-[#1c1c1c] border-b border-[#FF0500]/20 sticky top-0 z-10">
+                            {columns.filter(col => col.enabled).map((col, idx) => {
+                              const isCurrentSort = sortColumn === col.name;
+                              const displayName = col.rawIndex === 10 ? 'Surveyor' : col.name;
+                              const translatedDisplayName = translateColumnHeader(displayName, language);
+                              return (
+                                <th 
+                                  key={idx} 
+                                  onClick={() => {
+                                    if (sortColumn === col.name) {
+                                      if (sortDirection === 'asc') {
+                                        setSortDirection('desc');
+                                      } else if (sortDirection === 'desc') {
+                                        setSortColumn(null);
+                                        setSortDirection(null);
+                                      }
+                                    } else {
+                                      setSortColumn(col.name);
+                                      setSortDirection('asc');
+                                    }
+                                    setCurrentPage(1);
+                                  }}
+                                  className="py-1 px-2 text-[8px] uppercase tracking-widest font-black text-[#FFB451] whitespace-nowrap sticky top-0 z-10 bg-[#1c1c1c] border-b border-[#FF0500]/20 cursor-pointer select-none hover:bg-black/40 group/th transition-all"
+                                  id={`sort-th-${col.rawIndex}`}
+                                  title={t("Click to sort")}
+                                >
+                                  <div className="flex items-center gap-1.5 justify-between">
+                                    <span>{translatedDisplayName}</span>
+                                    <span className="text-[#FF0500] font-mono text-[9px] select-none flex items-center shrink-0">
+                                      {sortColumn === col.name ? (
+                                        sortDirection === 'asc' ? '▲' : '▼'
+                                      ) : (
+                                        <span className="opacity-0 group-hover/th:opacity-40 text-[7px] transition-all">▲▼</span>
+                                      )}
+                                    </span>
+                                  </div>
+                                </th>
+                              );
+                            })}
                           </tr>
                         </thead>
-                        <tbody className="divide-y divide-agt-orange/5">
+                        <tbody className="divide-y divide-[#FF0500]/10 bg-black/20">
                           {paginatedRecords.map((record, rIdx) => (
-                            <tr key={rIdx} className="hover:bg-agt-orange/[0.02] transition-colors group">
-                              {columns.filter(col => col.enabled).map((col, cIdx) => (
-                                <td key={cIdx} className="p-4 text-[11px] text-agt-orange font-mono whitespace-nowrap overflow-hidden text-ellipsis max-w-[200px]">
-                                  {getDisplayValue(record[col.name], col.rawIndex) || <span className="text-agt-orange italic">-</span>}
-                                </td>
-                              ))}
+                            <tr key={rIdx} className="hover:bg-[#E25530]/5 transition-colors group">
+                              {columns.filter(col => col.enabled).map((col, cIdx) => {
+                                const rawVal = record[col.name];
+                                const displayVal = getDisplayValue(rawVal, col.rawIndex);
+                                const isUrl = (col.rawIndex >= 76 && col.rawIndex <= 80) || String(rawVal || '').trim().startsWith('http');
+                                return (
+                                  <td key={cIdx} className="py-0.5 px-2 text-[10px] text-[#FFB451] font-mono whitespace-nowrap overflow-hidden text-ellipsis max-w-[200px]">
+                                    {isUrl && rawVal ? (
+                                      <a
+                                        href={String(rawVal).trim()}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className="text-[#FFB451] underline hover:text-[#ffca80] transition-colors"
+                                      >
+                                        {displayVal || 'LINK'}
+                                      </a>
+                                    ) : (
+                                      displayVal || <span className="text-white/20 italic">-</span>
+                                    )}
+                                  </td>
+                                );
+                              })}
                             </tr>
                           ))}
                         </tbody>
-                        <tfoot className="border-t-2 border-agt-orange/10 bg-agt-orange/[0.03]">
+                        <tfoot className="border-t-2 border-[#FF0500]/20 bg-[#161616]">
                           <tr>
                             {columns.filter(col => col.enabled).map((col, idx) => (
-                              <td key={idx} className="p-4 text-[10px] font-bold text-agt-orange">
+                              <td key={idx} className="py-1 px-2 text-[9px] font-bold text-white">
                                 {col.name === columns[0]?.name ? (
                                   <div className="flex flex-col">
-                                    <span className="text-[8px] text-agt-orange uppercase tracking-tighter">Total Matches</span>
+                                    <span className="text-[7px] text-white/60 uppercase tracking-tighter">{t("Total Matches")}</span>
                                     <span>{matchedRecords.length}</span>
                                   </div>
                                 ) : null}
@@ -835,46 +1726,46 @@ export default function App() {
                         </tfoot>
                       </table>
                     </div>
-
+ 
                     {/* Pagination Navigation Bar */}
                     {matchedRecords.length > pageSize && (
-                      <div className="p-6 border-t border-agt-orange/5 bg-agt-orange/[0.02] flex flex-col md:flex-row items-center justify-between gap-4">
-                        <div className="text-[11px] uppercase tracking-wider text-agt-orange/80 font-mono">
-                          Showing Page <span className="text-agt-orange font-bold font-sans">{currentPage}</span> of <span className="text-agt-orange font-bold font-sans">{totalPages}</span> <span className="text-agt-orange/40">({matchedRecords.length} total rows)</span>
+                      <div className="p-6 border-t border-[#FF0500]/20 bg-[#161616] flex flex-col md:flex-row items-center justify-between gap-4">
+                        <div className="text-[11px] uppercase tracking-wider text-white/80 font-mono">
+                          {t("Showing Page ")}<span className="text-[#FFB451] font-bold font-sans">{currentPage}</span>{t(" of ")}<span className="text-[#FFB451] font-bold font-sans">{totalPages}</span> <span className="text-white/40">({matchedRecords.length} {t(" total rows")})</span>
                         </div>
-
+ 
                         <div className="flex flex-wrap items-center gap-2">
                           <button
                             onClick={() => setCurrentPage(1)}
                             disabled={currentPage === 1}
-                            className="px-3 py-1.5 rounded-lg border border-agt-orange/20 bg-black/40 text-[10px] uppercase font-bold tracking-widest text-agt-orange hover:bg-agt-orange/10 disabled:opacity-30 disabled:pointer-events-none transition-all"
+                            className="px-3 py-1.5 rounded-lg border border-[#FF0500] bg-[#E25530] text-white text-[10px] uppercase font-bold tracking-widest hover:bg-[#E25530]/90 disabled:opacity-30 disabled:pointer-events-none transition-all"
                           >
-                            First
+                            {t("First")}
                           </button>
-
+ 
                           <button
                             onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
                             disabled={currentPage === 1}
-                            className="px-3 py-1.5 rounded-lg border border-agt-orange/20 bg-black/40 text-[10px] uppercase font-bold tracking-widest text-agt-orange hover:bg-agt-orange/10 disabled:opacity-30 disabled:pointer-events-none transition-all"
+                            className="px-3 py-1.5 rounded-lg border border-[#FF0500] bg-[#E25530] text-white text-[10px] uppercase font-bold tracking-widest hover:bg-[#E25530]/90 disabled:opacity-30 disabled:pointer-events-none transition-all"
                           >
-                            Prev
+                            {t("Prev")}
                           </button>
-
+ 
                           <div className="flex items-center gap-1">
                             {Array.from({ length: totalPages }).map((_, idx) => {
                               const pageNum = idx + 1;
                               if (totalPages > 6) {
                                 if (pageNum !== 1 && pageNum !== totalPages && Math.abs(pageNum - currentPage) > 1) {
                                   if (pageNum === 2 && currentPage > 3) {
-                                    return <span key="ellipsis-start" className="text-agt-orange/40 font-mono text-[10px] px-1">...</span>;
+                                    return <span key="ellipsis-start" className="text-white/40 font-mono text-[10px] px-1">...</span>;
                                   }
                                   if (pageNum === totalPages - 1 && currentPage < totalPages - 2) {
-                                    return <span key="ellipsis-end" className="text-agt-orange/40 font-mono text-[10px] px-1">...</span>;
+                                    return <span key="ellipsis-end" className="text-white/40 font-mono text-[10px] px-1">...</span>;
                                   }
                                   return null;
                                 }
                               }
-
+ 
                               const isCurrent = pageNum === currentPage;
                               return (
                                 <button
@@ -882,8 +1773,8 @@ export default function App() {
                                   onClick={() => setCurrentPage(pageNum)}
                                   className={`w-8 h-8 rounded-lg flex items-center justify-center font-mono text-xs transition-all ${
                                     isCurrent
-                                      ? 'bg-agt-orange text-black font-extrabold shadow-[0_0_15px_rgba(255,180,81,0.6)] ring-2 ring-agt-orange ring-offset-2 ring-offset-black scale-110'
-                                      : 'border border-agt-orange/10 bg-black/20 text-agt-orange hover:bg-agt-orange/10'
+                                      ? 'bg-[#E25530] text-white font-extrabold shadow-[0_0_15px_rgba(226,85,48,0.8)] border-2 border-[#FF0500] scale-110'
+                                      : 'border border-[#FF0500]/20 bg-[#E25530]/10 text-white hover:bg-[#E25530]/40'
                                   }`}
                                   id={`page-btn-${pageNum}`}
                                 >
@@ -892,34 +1783,34 @@ export default function App() {
                               );
                             })}
                           </div>
-
+ 
                           <button
                             onClick={() => setCurrentPage(prev => Math.min(totalPages, prev + 1))}
                             disabled={currentPage === totalPages}
-                            className="px-3 py-1.5 rounded-lg border border-agt-orange/20 bg-black/40 text-[10px] uppercase font-bold tracking-widest text-agt-orange hover:bg-agt-orange/10 disabled:opacity-30 disabled:pointer-events-none transition-all"
+                            className="px-3 py-1.5 rounded-lg border border-[#FF0500] bg-[#E25530] text-white text-[10px] uppercase font-bold tracking-widest hover:bg-[#E25530]/90 disabled:opacity-30 disabled:pointer-events-none transition-all"
                           >
-                            Next
+                            {t("Next")}
                           </button>
-
+ 
                           <button
                             onClick={() => setCurrentPage(totalPages)}
                             disabled={currentPage === totalPages}
-                            className="px-3 py-1.5 rounded-lg border border-agt-orange/20 bg-black/40 text-[10px] uppercase font-bold tracking-widest text-agt-orange hover:bg-agt-orange/10 disabled:opacity-30 disabled:pointer-events-none transition-all"
+                            className="px-3 py-1.5 rounded-lg border border-[#FF0500] bg-[#E25530] text-white text-[10px] uppercase font-bold tracking-widest hover:bg-[#E25530]/90 disabled:opacity-30 disabled:pointer-events-none transition-all"
                           >
-                            Last
+                            {t("Last")}
                           </button>
                         </div>
                       </div>
                     )}
-
+ 
                     <div className="p-6 border-t border-agt-orange/5 flex flex-col md:flex-row items-center justify-between gap-6 bg-agt-orange/[0.01]">
                       <div className="flex items-center gap-4">
                         <div className="flex items-center gap-2">
                           <div className="w-1.5 h-1.5 rounded-full bg-agt-orange shadow-[0_0_8px_rgba(255,180,81,0.4)]"></div>
-                          <span className="text-[9px] uppercase tracking-widest text-agt-orange font-bold">Ledger Integrity: Verified</span>
+                          <span className="text-[9px] uppercase tracking-widest text-agt-orange font-bold">{t("Ledger Integrity: Verified")}</span>
                         </div>
                         <span className="text-[9px] font-mono text-agt-orange uppercase tracking-widest hidden md:inline">
-                          Index Reference: {Math.random().toString(16).substring(2, 8).toUpperCase()}
+                          {t("Index Reference: ")}{Math.random().toString(16).substring(2, 8).toUpperCase()}
                         </span>
                       </div>
                     </div>
@@ -935,8 +1826,8 @@ export default function App() {
                       <Database className="w-6 h-6" />
                     </div>
                     <div className="space-y-1">
-                      <p className="text-sm font-medium uppercase tracking-[0.2em]">Terminal Ready</p>
-                      <p className="text-xs font-light">Report Generation Sequence Pending Civilization Selection</p>
+                      <p className="text-sm font-medium uppercase tracking-[0.2em]">{t("Terminal Ready")}</p>
+                      <p className="text-xs font-light">{t("Report Generation Sequence Pending Civilization Selection")}</p>
                     </div>
                   </motion.div>
                 )}
@@ -970,17 +1861,57 @@ export default function App() {
             <span className="ml-1 mr-2 text-black/40">|</span>
             <a href="https://www.nms-agt.com/terms/copyright" target="_blank" rel="noopener noreferrer" className="hover:opacity-60 transition-opacity">Copyright</a>
           </div>
-          <p className="text-[9px] font-mono uppercase tracking-[0.3em] font-bold">&copy; 2026 Alliance of Galactic Travellers</p>
+          <p className="text-[9px] font-mono uppercase tracking-[0.3em] font-bold">&copy; 2026 {t("Alliance of Galactic Travellers")}</p>
         </div>
       </footer>
 
       {/* Background Audio */}
       <audio 
         ref={audioRef}
-        src="/api/asset-proxy?id=1MLd7Vp0whtVXZF-KRxSoH2544q4TA5zD"
+        src={agtAnthem}
         loop
         preload="auto"
       />
+
+      {/* PDF Error Modal Pop-up */}
+      <AnimatePresence>
+        {pdfErrorMsg && (
+          <div className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-black/90 backdrop-blur-sm">
+            <div className="absolute inset-0" onClick={() => setPdfErrorMsg(null)} />
+            
+            <motion.div 
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className="w-full max-w-lg bg-[#111111] border-2 border-[#FF0500] rounded-2xl p-8 flex flex-col relative shadow-[0_0_50px_rgba(255,5,0,0.4)] text-center space-y-6"
+              id="pdf-error-popup"
+            >
+              <div className="mx-auto w-16 h-16 rounded-full bg-[#FF0500]/10 border-2 border-[#FF0500] flex items-center justify-center animate-pulse">
+                <AlertCircle className="w-8 h-8 text-[#FF0500]" />
+              </div>
+              
+              <div className="space-y-2">
+                <h3 className="text-xl font-bold uppercase tracking-widest text-[#FF0500]" id="pdf-error-title">
+                  Report Exceeds Limit
+                </h3>
+                <p className="text-xs text-[#FFB451] font-mono leading-relaxed animate-pulse" id="pdf-error-message">
+                  {pdfErrorMsg}
+                </p>
+              </div>
+
+              <div className="pt-2">
+                <button 
+                  onClick={() => setPdfErrorMsg(null)}
+                  className="px-10 py-3.5 bg-[#E25530] border-2 border-[#FF0500] text-white rounded-full font-black text-[10px] uppercase tracking-widest hover:bg-[#E25530]/90 active:scale-[0.96] transition-all shadow-[0_4px_15px_rgba(255,5,0,0.2)]"
+                  id="pdf-error-close-btn"
+                >
+                  Dismiss
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
