@@ -511,6 +511,10 @@ export default function App() {
               if (colA === '' || colA.includes('SKIPROW') || colA.includes('#N/A')) return false;
               if (colB === '') return false;
               
+              // Exclude all records with value 99 in column AM (index 38)
+              const colAM = String(row[38] || '').trim();
+              if (colAM === '99') return false;
+              
               return true;
             })
             .map(row => {
@@ -1212,38 +1216,16 @@ export default function App() {
                 </div>
               </div>
 
-              <div className="flex flex-wrap items-center justify-center gap-4 text-center">
-                <div className="space-y-1">
-                  <p className="text-[#FFB451] text-[10px] font-bold tracking-widest uppercase">{t("Criteria 1")}</p>
-                  <p className="text-[#FFB451] text-xs font-bold tracking-widest uppercase">{t("Select Civilization")}</p>
-                </div>
-                <div className="h-px w-6 bg-[#FF0500]/20 hidden md:block mt-4"></div>
-                <div className="space-y-1">
-                  <p className="text-[#FFB451] text-[10px] font-bold tracking-widest uppercase">{t("Criteria 2")}</p>
-                  <p className="text-[#FFB451] text-xs font-bold tracking-widest uppercase">{t("Preferred Galaxy")}</p>
-                </div>
-                <div className="h-px w-6 bg-[#FF0500]/20 hidden md:block mt-4"></div>
-                <div className="space-y-1">
-                  <p className="text-[#FFB451] text-[10px] font-bold tracking-widest uppercase">{t("Criteria 3")}</p>
-                  <p className="text-[#FFB451] text-xs font-bold tracking-widest uppercase">{t("Preferred Region")}</p>
-                </div>
-                <div className="h-px w-6 bg-[#FF0500]/20 hidden md:block mt-4"></div>
-                <div className="space-y-1">
-                  <p className="text-[#FFB451] text-[10px] font-bold tracking-widest uppercase opacity-75">{t("Criteria 4 (Opt)")}</p>
-                  <p className="text-[#FFB451] text-xs font-bold tracking-widest uppercase opacity-75 font-bold">{t("Discoverer Name")}</p>
-                </div>
-                <div className="h-px w-6 bg-[#FF0500]/20 hidden md:block mt-4"></div>
-                <div className="space-y-1">
-                  <p className="text-[#FFB451] text-[10px] font-bold tracking-widest uppercase opacity-75">{t("Criteria 5 (Opt)")}</p>
-                  <p className="text-[#FFB451] text-xs font-bold tracking-widest uppercase opacity-75 font-bold">{t("Surveyor Name")}</p>
-                </div>
-              </div>
             </div>
 
             <div className="w-full max-w-4xl space-y-6">
               <div className="grid grid-cols-1 md:grid-cols-3 gap-6 items-start">
                 {/* Civilization Autocomplete */}
                 <div className="space-y-2">
+                  <div className="space-y-1 text-left ml-1 select-none">
+                    <p className="text-[#FFB451] text-[10px] font-bold tracking-widest uppercase">{t("Criteria 1")}</p>
+                    <p className="text-[#FFB451] text-xs font-bold tracking-widest uppercase">{t("Select Civilization")}</p>
+                  </div>
                   <AutocompleteInput
                     id="civilization-select"
                     value={searchKey}
@@ -1261,6 +1243,10 @@ export default function App() {
 
                 {/* Galaxy Autocomplete */}
                 <div className="space-y-2">
+                  <div className="space-y-1 text-left ml-1 select-none">
+                    <p className="text-[#FFB451] text-[10px] font-bold tracking-widest uppercase">{t("Criteria 2")}</p>
+                    <p className="text-[#FFB451] text-xs font-bold tracking-widest uppercase">{t("Preferred Galaxy")}</p>
+                  </div>
                   <AutocompleteInput
                     id="galaxy-select"
                     value={selectedGalaxy}
@@ -1288,6 +1274,10 @@ export default function App() {
 
                 {/* Region Autocomplete */}
                 <div className="space-y-2">
+                  <div className="space-y-1 text-left ml-1 select-none">
+                    <p className="text-[#FFB451] text-[10px] font-bold tracking-widest uppercase">{t("Criteria 3")}</p>
+                    <p className="text-[#FFB451] text-xs font-bold tracking-widest uppercase">{t("Preferred Region")}</p>
+                  </div>
                   <AutocompleteInput
                     id="region-select"
                     value={selectedRegion}
@@ -1308,6 +1298,10 @@ export default function App() {
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-start w-full max-w-2xl mx-auto">
                 {/* Discoverer Autocomplete (Optional) */}
                 <div className="space-y-2">
+                  <div className="space-y-1 text-left ml-1 select-none">
+                    <p className="text-[#FFB451] text-[10px] font-bold tracking-widest uppercase opacity-75">{t("Criteria 4 (Opt)")}</p>
+                    <p className="text-[#FFB451] text-xs font-bold tracking-widest uppercase opacity-75 font-bold">{t("Discoverer Name")}</p>
+                  </div>
                   <AutocompleteInput
                     id="discoverer-select"
                     value={discovererName}
@@ -1325,6 +1319,10 @@ export default function App() {
 
                 {/* Surveyor Autocomplete (Optional) */}
                 <div className="space-y-2">
+                  <div className="space-y-1 text-left ml-1 select-none">
+                    <p className="text-[#FFB451] text-[10px] font-bold tracking-widest uppercase opacity-75">{t("Criteria 5 (Opt)")}</p>
+                    <p className="text-[#FFB451] text-xs font-bold tracking-widest uppercase opacity-75 font-bold">{t("Surveyor Name")}</p>
+                  </div>
                   <AutocompleteInput
                     id="surveyor-select"
                     value={surveyorName}
