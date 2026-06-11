@@ -524,6 +524,72 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [matchedRecords, setMatchedRecords] = useState<any[]>([]);
 
+  // Synchronized horizontal scrollbars for displayed results table
+  const topScrollRef = useRef<HTMLDivElement>(null);
+  const bottomScrollRef = useRef<HTMLDivElement>(null);
+  const [tableScrollWidth, setTableScrollWidth] = useState(0);
+  const [tableClientWidth, setTableClientWidth] = useState(0);
+
+  const isScrollingTopRef = useRef(false);
+  const isScrollingBottomRef = useRef(false);
+
+  const handleTopScroll = () => {
+    if (isScrollingBottomRef.current) return;
+    isScrollingTopRef.current = true;
+    const topEl = topScrollRef.current;
+    const bottomEl = bottomScrollRef.current;
+    if (topEl && bottomEl) {
+      if (bottomEl.scrollLeft !== topEl.scrollLeft) {
+        bottomEl.scrollLeft = topEl.scrollLeft;
+      }
+    }
+    requestAnimationFrame(() => {
+      isScrollingTopRef.current = false;
+    });
+  };
+
+  const handleBottomScroll = () => {
+    if (isScrollingTopRef.current) return;
+    isScrollingBottomRef.current = true;
+    const topEl = topScrollRef.current;
+    const bottomEl = bottomScrollRef.current;
+    if (topEl && bottomEl) {
+      if (topEl.scrollLeft !== bottomEl.scrollLeft) {
+        topEl.scrollLeft = bottomEl.scrollLeft;
+      }
+    }
+    requestAnimationFrame(() => {
+      isScrollingBottomRef.current = false;
+    });
+  };
+
+  useEffect(() => {
+    const bottomEl = bottomScrollRef.current;
+    if (!bottomEl) return;
+
+    const updateWidths = () => {
+      setTableScrollWidth(bottomEl.scrollWidth);
+      setTableClientWidth(bottomEl.clientWidth);
+    };
+
+    updateWidths();
+
+    const resizeObserver = new ResizeObserver(() => {
+      updateWidths();
+    });
+
+    resizeObserver.observe(bottomEl);
+
+    const tableEl = bottomEl.querySelector('table');
+    if (tableEl) {
+      resizeObserver.observe(tableEl);
+    }
+
+    return () => {
+      resizeObserver.disconnect();
+    };
+  }, [data, columns]);
+
   // Save sheet URL to localStorage
   useEffect(() => {
     if (sheetUrl) {
@@ -656,7 +722,8 @@ export default function App() {
     setColumns(filteredColumns);
     
     const processedData = rawRows.slice(3) // Skip Rows 1, 2, 3 (index 0, 1, 2)
-      .filter(row => {
+      .map((row, idx) => ({ row, originalIndex: idx + 3 }))
+      .filter(({ row }) => {
         const colA = String(row[0] || '').trim();
         const colB = String(row[1] || '').trim();
         
@@ -676,8 +743,8 @@ export default function App() {
         
         return true;
       })
-      .map(row => {
-        const rowObj: any = { _rawRow: row };
+      .map(({ row, originalIndex }) => {
+        const rowObj: any = { _rawRow: row, _originalIndex: originalIndex };
         targetIndexes.forEach((colIdx, listIdx) => {
           const headerName = filteredColumns[listIdx]?.name || getColLetter(colIdx);
           rowObj[headerName] = row[colIdx] || '';
@@ -2021,7 +2088,24 @@ export default function App() {
                       </div>
                     </div>
  
-                    <div className="overflow-x-auto max-h-[500px] overflow-y-auto custom-scrollbar">
+                    {/* Top synchronized horizontal scrollbar */}
+                    <div 
+                      ref={topScrollRef} 
+                      onScroll={handleTopScroll}
+                      className={`overflow-x-auto overflow-y-hidden border-b border-[#FF0500]/20 bg-[#161616] settings-scrollbar ${
+                        tableScrollWidth > tableClientWidth ? 'block' : 'hidden'
+                      }`}
+                      style={{ minHeight: '12px' }}
+                      id="top-scrollbar-container"
+                    >
+                      <div style={{ width: `${tableScrollWidth}px`, height: '1px' }}></div>
+                    </div>
+
+                    <div 
+                      ref={bottomScrollRef}
+                      onScroll={handleBottomScroll}
+                      className="overflow-x-auto max-h-[500px] overflow-y-auto settings-scrollbar"
+                    >
                       <table className="w-full text-left border-collapse relative">
                         <thead className="sticky top-0 z-10 bg-[#1c1c1c] shadow-[0_1px_0_rgba(255,5,0,0.15)]">
                           <tr className="bg-[#1c1c1c] border-b border-[#FF0500]/20 sticky top-0 z-10">
@@ -2067,7 +2151,13 @@ export default function App() {
                         </thead>
                         <tbody className="divide-y divide-[#FF0500]/10 bg-black/20">
                           {paginatedRecords.map((record, rIdx) => (
-                            <tr key={rIdx} className="hover:bg-[#E25530]/5 transition-colors group">
+                            <motion.tr 
+                              key={record._originalIndex !== undefined ? `row-${record._originalIndex}` : `row-${rIdx}`}
+                              initial={{ opacity: 0 }}
+                              animate={{ opacity: 1 }}
+                              transition={{ duration: 0.25, ease: "easeOut" }}
+                              className="hover:bg-[#E25530]/5 transition-colors group"
+                            >
                               {columns.filter(col => col.enabled).map((col, cIdx) => {
                                 const rawVal = record[col.name];
                                 const displayVal = getDisplayValue(rawVal, col.rawIndex);
@@ -2099,7 +2189,7 @@ export default function App() {
                                   </td>
                                 );
                               })}
-                            </tr>
+                            </motion.tr>
                           ))}
                         </tbody>
                         <tfoot className="border-t-2 border-[#FF0500]/20 bg-[#161616]">
