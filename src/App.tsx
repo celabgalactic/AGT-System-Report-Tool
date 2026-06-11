@@ -256,6 +256,48 @@ function AutocompleteInput({ value, onChange, suggestions, placeholder, id, icon
   );
 }
 
+const setCookie = (name: string, value: string, days = 365) => {
+  const expires = new Date();
+  expires.setTime(expires.getTime() + days * 24 * 60 * 60 * 1000);
+  document.cookie = `${name}=${encodeURIComponent(value)};expires=${expires.toUTCString()};path=/;SameSite=Lax;`;
+};
+
+const getCookie = (name: string): string | null => {
+  const nameEQ = name + "=";
+  const ca = document.cookie.split(';');
+  for (let i = 0; i < ca.length; i++) {
+    let c = ca[i];
+    while (c.charAt(0) === ' ') c = c.substring(1, c.length);
+    if (c.indexOf(nameEQ) === 0) return decodeURIComponent(c.substring(nameEQ.length, c.length));
+  }
+  return null;
+};
+
+const deleteCookie = (name: string) => {
+  document.cookie = `${name}=;expires=Thu, 01 Jan 1970 00:00:00 UTC;path=/;SameSite=Lax;`;
+};
+
+const getSecurityLevelNum = (val: string): number => {
+  const normalized = String(val || '').trim().toLowerCase();
+  if (normalized === 'public' || normalized === '0') return 0;
+  if (normalized === 'private' || normalized === '1') return 1;
+  if (normalized === 'restricted' || normalized === '2') return 2;
+  if (normalized === 'top secret' || normalized === '3') return 3;
+  if (normalized === 'slt restricted' || normalized === '4') return 4;
+  if (normalized === 'scc restricted' || normalized === '5') return 5;
+  return 0; // Default to Public (0)
+};
+
+const getSecurityLevelLabel = (level: number | null): string => {
+  if (level === 0) return 'Public';
+  if (level === 1) return 'Private';
+  if (level === 2) return 'Restricted';
+  if (level === 3) return 'Top Secret';
+  if (level === 4) return 'SLT Restricted';
+  if (level === 5) return 'SCC Restricted';
+  return 'Public';
+};
+
 export default function App() {
   const [reportType, setReportType] = useState<ReportType>('simple');
   const [sheetUrl, setSheetUrl] = useState<string>(() => {
@@ -279,6 +321,21 @@ export default function App() {
   useEffect(() => {
     if (sheetUrl) {
       fetchData();
+    }
+  }, []);
+
+  // Load Traveller credentials from cookies on mount
+  useEffect(() => {
+    const name = getCookie('agt_traveller_name');
+    const id = getCookie('agt_traveller_id');
+    const lvlStr = getCookie('agt_security_level');
+    
+    if (name && id && lvlStr !== null) {
+      setSavedTravellerName(name);
+      setSavedTravellerId(id);
+      setSavedSecurityLevel(parseInt(lvlStr, 10));
+      setEnteredName(name);
+      setEnteredId(id);
     }
   }, []);
 
@@ -370,6 +427,29 @@ export default function App() {
   const [pdfErrorMsg, setPdfErrorMsg] = useState<string | null>(null);
   const [searchLoading, setSearchLoading] = useState(false);
   const [reportGeneratingLoading, setReportGeneratingLoading] = useState(false);
+
+  // Traveller Authentication States
+  const [savedTravellerName, setSavedTravellerName] = useState<string | null>(null);
+  const [savedTravellerId, setSavedTravellerId] = useState<string | null>(null);
+  const [savedSecurityLevel, setSavedSecurityLevel] = useState<number | null>(null);
+
+  const [enteredName, setEnteredName] = useState('');
+  const [enteredId, setEnteredId] = useState('');
+  const [isVerifying, setIsVerifying] = useState(false);
+  const [verificationError, setVerificationError] = useState(false);
+  const [alertPopup, setAlertPopup] = useState<{
+    show: boolean;
+    message: string;
+    onClose?: () => void;
+  } | null>(null);
+
+  const showAlert = (message: string, onClose?: () => void) => {
+    setAlertPopup({
+      show: true,
+      message,
+      onClose
+    });
+  };
 
   useEffect(() => {
     let interval: any = null;
@@ -588,6 +668,12 @@ export default function App() {
         if (colA === '' || colA.includes('SKIPROW') || colA.includes('#N/A')) return false;
         if (colB === '') return false;
         
+        // Security level filtering based on Column DF (index 109)
+        const securityVal = row[109] || '';
+        const rowSecurityLvl = getSecurityLevelNum(securityVal);
+        const allowedLvl = savedSecurityLevel !== null ? savedSecurityLevel : 0;
+        if (rowSecurityLvl > allowedLvl) return false;
+        
         return true;
       })
       .map(row => {
@@ -602,7 +688,7 @@ export default function App() {
     setData(processedData);
     
     findRecord(processedData, filteredColumns, searchKey, selectedGalaxy, selectedRegion, discovererName, surveyorName);
-  }, [rawRows, reportType, enabledCustomColumns, searchKey, selectedGalaxy, selectedRegion, discovererName, surveyorName]);
+  }, [rawRows, reportType, enabledCustomColumns, searchKey, selectedGalaxy, selectedRegion, discovererName, surveyorName, savedSecurityLevel]);
 
   const handleSearch = async () => {
     setSearchLoading(true);
@@ -708,6 +794,14 @@ export default function App() {
   };
 
   const downloadFullReportPdf = () => {
+    const name = getCookie('agt_traveller_name') || savedTravellerName;
+    const id = getCookie('agt_traveller_id') || savedTravellerId;
+
+    if (!name || !id) {
+      showAlert("PDF Report and Export CSV is only available to registered AGT Travellers. Enter your credientials in the setting menu");
+      return;
+    }
+
     if (sortedMatchedRecords.length === 0) return;
     
     const activeCols = columns.filter(col => col.enabled);
@@ -1031,6 +1125,14 @@ export default function App() {
   };
 
   const downloadCsv = () => {
+    const name = getCookie('agt_traveller_name') || savedTravellerName;
+    const id = getCookie('agt_traveller_id') || savedTravellerId;
+
+    if (!name || !id) {
+      showAlert("PDF Report and Export CSV is only available to registered AGT Travellers. Enter your credientials in the setting menu");
+      return;
+    }
+
     if (sortedMatchedRecords.length === 0) return;
     setReportGeneratingLoading(true);
 
@@ -1068,6 +1170,126 @@ export default function App() {
 
   const toggleColumn = (name: string) => {
     setColumns(prev => prev.map(c => c.name === name ? { ...c, enabled: !c.enabled } : c));
+  };
+
+  const handleVerifyTraveller = async () => {
+    const trimmedName = enteredName.trim();
+    const trimmedId = enteredId.trim();
+
+    if (!trimmedName || !trimmedId) {
+      showAlert("Please enter both your Traveller Name and Traveller ID.");
+      return;
+    }
+
+    if (trimmedName.length > 42) {
+      showAlert("Traveller Name cannot exceed 42 characters.");
+      return;
+    }
+
+    // ID format validation: ########-????-#### (case-insensitive)
+    const idRegex = /^\d{8}-[a-zA-Z0-9]{4}-\d{4}$/;
+    if (!idRegex.test(trimmedId)) {
+      showAlert("Invalid AGT Traveller ID format. Must follow ########-????-#### format.");
+      return;
+    }
+
+    setIsVerifying(true);
+    setVerificationError(false);
+
+    try {
+      const verifySheetUrl = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSOZq3Cl2e0aNqzXdLRe63HuM7PlqGH3HnS_-0x6P_CYnGDJlK5QvI-YjU0lNaOgLyp3uoktS4WIXyK/pub?gid=505079663&single=true&output=tsv";
+      const response = await fetch(verifySheetUrl);
+      if (!response.ok) {
+        throw new Error("Unable to connect to registry server.");
+      }
+      const tsvText = await response.text();
+      const lines = tsvText.split(/\r?\n/);
+      const rows = lines.map(line => line.split('\t'));
+
+      let matchedRow: string[] | null = null;
+      
+      const decodeXOR = (encodedText: string): string => {
+        const key = 969; 
+        let decoded = ""; 
+        for (let i = 0; i < encodedText.length; i++) { 
+          let charCode = encodedText.charCodeAt(i); 
+          let originalCharCode = charCode ^ key; 
+          decoded += String.fromCharCode(originalCharCode); 
+        } 
+        return decoded; 
+      };
+
+      for (const row of rows) {
+        if (row.length < 3) continue;
+        const colA = row[0].trim();
+        const colB = row[1].trim();
+
+        if (colA.toLowerCase() === trimmedName.toLowerCase()) {
+          const decodedB = decodeXOR(colB).trim();
+          if (decodedB.toLowerCase() === trimmedId.toLowerCase()) {
+            matchedRow = row;
+            break;
+          }
+        }
+      }
+
+      if (matchedRow) {
+        const colC = matchedRow[2].trim();
+        const levelNum = getSecurityLevelNum(colC);
+
+        // Save traveller name, AGT Traveller ID and security level to cookie
+        setCookie('agt_traveller_name', trimmedName);
+        setCookie('agt_traveller_id', trimmedId);
+        setCookie('agt_security_level', String(levelNum));
+
+        // Read and verify cookie save success
+        const testName = getCookie('agt_traveller_name');
+        const testId = getCookie('agt_traveller_id');
+        const testLevel = getCookie('agt_security_level');
+
+        if (testName === trimmedName && testId === trimmedId && testLevel === String(levelNum)) {
+          setSavedTravellerName(trimmedName);
+          setSavedTravellerId(trimmedId);
+          setSavedSecurityLevel(levelNum);
+          showAlert("Verification successful, setting saved");
+        } else {
+          // If cookie doesn't save properly, we still activate the session values so they are usable
+          setSavedTravellerName(trimmedName);
+          setSavedTravellerId(trimmedId);
+          setSavedSecurityLevel(levelNum);
+          showAlert("Verification successful, setting save error");
+        }
+      } else {
+        setVerificationError(true);
+        showAlert("Verification unsuccessful");
+      }
+    } catch (err) {
+      console.error(err);
+      showAlert("Verification failed due to a network or parsing issue.");
+    } finally {
+      setIsVerifying(false);
+    }
+  };
+
+  const handleClearTraveller = () => {
+    deleteCookie('agt_traveller_name');
+    deleteCookie('agt_traveller_id');
+    deleteCookie('agt_security_level');
+
+    const testName = getCookie('agt_traveller_name');
+    const testId = getCookie('agt_traveller_id');
+
+    if (testName === null && testId === null) {
+      setSavedTravellerName(null);
+      setSavedTravellerId(null);
+      setSavedSecurityLevel(null);
+      setEnteredName('');
+      setEnteredId('');
+      setVerificationError(false);
+      showAlert("Clearing successful");
+    } else {
+      showAlert("Clearing failed");
+    }
   };
 
   const activeColumnsCount = useMemo(() => columns.filter(c => c.enabled).length, [columns]);
@@ -1628,6 +1850,103 @@ export default function App() {
                           </div>
                         </div>
 
+                        {/* Traveller Registry Validation Section */}
+                        <div className="col-span-1 md:col-span-2 lg:col-span-3 pt-8 border-t border-[#FF0500]/20 space-y-4">
+                          <div className="space-y-1">
+                            <h3 className="text-[10px] uppercase tracking-widest font-bold text-[#FFB451] flex items-center gap-2">
+                              <Settings className="w-3 h-3" />
+                              {t("Traveller Registry Validation")}
+                            </h3>
+                            <p className="text-[10px] text-[#FFB451]/60 font-mono tracking-wide">
+                              {t("Enter your registered Traveller Name and ID to authenticate and access higher security classifications")}
+                            </p>
+                          </div>
+                          
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                            <div className="space-y-2">
+                              <label className="block text-[9px] text-[#FFB451] font-bold tracking-widest uppercase ml-1">
+                                {t("Traveller Name")}
+                              </label>
+                              <input
+                                type="text"
+                                maxLength={42}
+                                value={enteredName}
+                                onChange={(e) => setEnteredName(e.target.value)}
+                                placeholder="Your AGT User Name"
+                                className="block w-full px-5 py-4 bg-[#1d1d1d] border border-[#FF0500] rounded-xl text-white font-mono text-xs focus:outline-none focus:ring-1 focus:ring-[#FF0500]"
+                                id="traveller-name-input"
+                              />
+                            </div>
+
+                            <div className="space-y-2">
+                              <label className="block text-[9px] text-[#FFB451] font-bold tracking-widest uppercase ml-1">
+                                {t("AGT Traveller ID")}
+                              </label>
+                              <input
+                                type="text"
+                                value={enteredId}
+                                onChange={(e) => setEnteredId(e.target.value)}
+                                placeholder="37######-????-####"
+                                className="block w-full px-5 py-4 bg-[#1d1d1d] border border-[#FF0500] rounded-xl text-white font-mono text-xs focus:outline-none focus:ring-1 focus:ring-[#FF0500]"
+                                id="traveller-id-input"
+                              />
+                            </div>
+                          </div>
+
+                          {verificationError && (
+                            <div className="text-left text-[11px] text-[#FF0500] font-bold tracking-wide mt-2 font-mono flex items-center gap-1.5 p-3 bg-red-950/20 rounded-lg border border-red-500/20" id="traveller-verification-error">
+                              <AlertCircle className="w-4 h-4 shrink-0" />
+                              <span>
+                                {t("Traveller Name and ID and does not match, Please consult")}{" "}
+                                <a 
+                                  href="https://www.nms-agt.com/support/traveller-id" 
+                                  target="_blank" 
+                                  rel="noopener noreferrer"
+                                  className="text-orange-400 hover:text-orange-300 underline transition font-extrabold uppercase text-[10px]"
+                                  id="verification-error-support-link"
+                                >
+                                  {t("AGT Support")}
+                                </a>
+                              </span>
+                            </div>
+                          )}
+
+                          <div className="flex flex-wrap items-center gap-3 pt-2">
+                            <button
+                              onClick={handleVerifyTraveller}
+                              disabled={isVerifying}
+                              className={`px-6 py-3.5 bg-[#E25530] border border-[#FF0500] text-white rounded-xl text-[10px] uppercase tracking-[0.1em] font-semibold hover:bg-[#E25530]/90 transition-colors shadow-[0_4px_20px_rgba(226,85,48,0.2)] active:scale-[0.98] flex items-center gap-2 ${
+                                isVerifying ? 'opacity-50 cursor-not-allowed' : ''
+                              }`}
+                              id="verify-traveller-btn"
+                            >
+                              {isVerifying ? (
+                                <>
+                                  <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                                  {t("Authenticating...")}
+                                </>
+                              ) : (
+                                t("Verify Credentials")
+                              )}
+                            </button>
+                            
+                            <button
+                              onClick={handleClearTraveller}
+                              className="px-6 py-3.5 bg-transparent border border-[#FF0500]/40 text-[#FFB451] hover:text-white hover:bg-[#FF0500]/10 rounded-xl text-[10px] uppercase tracking-[0.1em] font-semibold transition active:scale-[0.98]"
+                              id="clear-traveller-btn"
+                            >
+                              {t("Clear Credentials")}
+                            </button>
+
+                            {savedTravellerName && (
+                              <div className="ml-auto flex items-center gap-2 text-[10px] font-mono text-emerald-400 bg-emerald-950/20 border border-emerald-500/20 px-3 py-1.5 rounded-lg" id="saved-traveller-indicator">
+                                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                                <span>{t("Verified:")} {savedTravellerName} ({getSecurityLevelLabel(savedSecurityLevel)})</span>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+
                         {/* System Database Section at the bottom of the scrollable content */}
                         <div className="col-span-1 md:col-span-2 lg:col-span-3 pt-8 border-t border-[#FF0500]/20 space-y-4">
                           <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
@@ -1978,6 +2297,54 @@ export default function App() {
                   onClick={() => setPdfErrorMsg(null)}
                   className="px-10 py-3.5 bg-[#E25530] border-2 border-[#FF0500] text-white rounded-full font-black text-[10px] uppercase tracking-widest hover:bg-[#E25530]/90 active:scale-[0.96] transition-all shadow-[0_4px_15px_rgba(255,5,0,0.2)]"
                   id="pdf-error-close-btn"
+                >
+                  Dismiss
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Custom Alert Modal Pop-up */}
+      <AnimatePresence>
+        {alertPopup && alertPopup.show && (
+          <div className="fixed inset-0 z-[120] flex items-center justify-center p-4 bg-black/90 backdrop-blur-sm animate-[fadeIn_0.2s_ease-out]">
+            <div className="absolute inset-0 max-w-full" onClick={() => {
+              const cb = alertPopup.onClose;
+              setAlertPopup(null);
+              if (cb) cb();
+            }} />
+            
+            <motion.div 
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className="w-full max-w-lg bg-[#111111] border-2 border-[#FF0500] rounded-2xl p-8 flex flex-col relative shadow-[0_0_50px_rgba(255,5,0,0.4)] text-center space-y-6 z-[121]"
+              id="custom-alert-popup"
+            >
+              <div className="mx-auto w-16 h-16 rounded-full bg-[#FF0500]/10 border-2 border-[#FF0500] flex items-center justify-center">
+                <AlertCircle className="w-8 h-8 text-[#FFB451]" />
+              </div>
+              
+              <div className="space-y-2">
+                <h3 className="text-xl font-bold uppercase tracking-widest text-[#FFB451]" id="custom-alert-title">
+                  System Notification
+                </h3>
+                <p className="text-xs text-[#FFB451] font-mono leading-relaxed" id="custom-alert-message">
+                  {alertPopup.message}
+                </p>
+              </div>
+
+              <div className="pt-2">
+                <button 
+                  onClick={() => {
+                    const cb = alertPopup.onClose;
+                    setAlertPopup(null);
+                    if (cb) cb();
+                  }}
+                  className="px-10 py-3.5 bg-[#E25530] border-2 border-[#FF0500] text-white rounded-full font-black text-[10px] uppercase tracking-widest hover:bg-[#E25530]/90 active:scale-[0.96] transition-all shadow-[0_4px_15px_rgba(255,5,0,0.2)]"
+                  id="custom-alert-close-btn"
                 >
                   Dismiss
                 </button>
