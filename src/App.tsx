@@ -48,18 +48,35 @@ const colLetterToIdx = (letter: string): number => {
   return col - 1;
 };
 
-const parseExcelRange = (rangeStr: string): number[] => {
-  const parts = rangeStr.toUpperCase().split(/\s+to\s+|\s*-\s*/);
-  if (parts.length === 2) {
-    const startIdx = colLetterToIdx(parts[0]);
-    const endIdx = colLetterToIdx(parts[1]);
-    const indices: number[] = [];
-    for (let i = Math.min(startIdx, endIdx); i <= Math.max(startIdx, endIdx); i++) {
-      indices.push(i);
-    }
-    return indices;
+const getColLetter = (idx: number): string => {
+  let temp = idx;
+  let letter = '';
+  while (temp >= 0) {
+    letter = String.fromCharCode((temp % 26) + 65) + letter;
+    temp = Math.floor(temp / 26) - 1;
   }
-  return [colLetterToIdx(rangeStr)];
+  return letter;
+};
+
+const parseExcelRange = (rangeStr: string): number[] => {
+  const result: number[] = [];
+  const segments = rangeStr.split(',');
+  segments.forEach(seg => {
+    const parts = seg.trim().split(/\s+to\s+|\s*-\s*/i);
+    if (parts.length === 2) {
+      const startIdx = colLetterToIdx(parts[0].trim());
+      const endIdx = colLetterToIdx(parts[1].trim());
+      for (let i = Math.min(startIdx, endIdx); i <= Math.max(startIdx, endIdx); i++) {
+        result.push(i);
+      }
+    } else {
+      const single = seg.trim();
+      if (single) {
+        result.push(colLetterToIdx(single));
+      }
+    }
+  });
+  return result;
 };
 
 const CUSTOM_COLUMN_DEFS = [
@@ -95,13 +112,13 @@ const CUSTOM_COLUMN_DEFS = [
   { id: 'AL', label: 'Release', letters: 'AL' },
   { id: 'CQ', label: 'Rel#', letters: 'CQ' },
   { id: 'AN_AR', label: 'Trade', letters: 'AN to AR' },
-  { id: 'AS_BG', label: 'Updates', letters: 'AS to BG' },
+  { id: 'AS_BG', label: 'Upgrades', letters: 'AS to BG' },
   { id: 'BM_BU', label: 'Notes', letters: 'BM to BU' },
   { id: 'BV', label: 'Phantom', letters: 'BV' },
   { id: 'BW', label: 'CTR Access', letters: 'BW' },
   { id: 'BY', label: 'Wiki Link', letters: 'BY' },
   { id: 'BZ_CD', label: 'Other Links', letters: 'BZ to CD' },
-  { id: 'CE_CJ', label: 'Legacy Info', letters: 'CE to CJ' },
+  { id: 'CE_CJ', label: 'Legacy Info', letters: 'CE to CK, DB to DD' },
   { id: 'CL', label: 'Age', letters: 'CL' },
   { id: 'CM', label: 'Research', letters: 'CM' },
   { id: 'CN', label: 'Misc', letters: 'CN' },
@@ -137,6 +154,21 @@ const getDisplayValue = (val: any, colIdx?: number) => {
     return CIV_ACRONYMS[strVal];
   }
   return strVal;
+};
+
+const isTargetColumnWithUrl = (colIdx: number | undefined, val: any): boolean => {
+  if (colIdx === undefined || colIdx === null) return false;
+  let temp = colIdx;
+  let letter = '';
+  while (temp >= 0) {
+    letter = String.fromCharCode((temp % 26) + 65) + letter;
+    temp = Math.floor(temp / 26) - 1;
+  }
+  const targets = ['BY', 'BZ', 'CA', 'CB', 'CC', 'CD', 'DB', 'DC', 'DD'];
+  if (!targets.includes(letter)) return false;
+  
+  const str = String(val || '').trim();
+  return str.startsWith('http://') || str.startsWith('https://');
 };
 
 interface AutocompleteProps {
@@ -329,9 +361,9 @@ export default function App() {
     return key;
   }, [language]);
 
-  const [searchKey, setSearchKey] = useState('All');
-  const [selectedGalaxy, setSelectedGalaxy] = useState('All');
-  const [selectedRegion, setSelectedRegion] = useState('All');
+  const [searchKey, setSearchKey] = useState('');
+  const [selectedGalaxy, setSelectedGalaxy] = useState('');
+  const [selectedRegion, setSelectedRegion] = useState('');
   const [discovererName, setDiscovererName] = useState('');
   const [surveyorName, setSurveyorName] = useState('');
   const [generationSeconds, setGenerationSeconds] = useState(0);
@@ -375,6 +407,7 @@ export default function App() {
   }, [enabledCustomColumns]);
 
   const [data, setData] = useState<any[]>([]);
+  const [rawRows, setRawRows] = useState<string[][]>([]);
 
   const civSuggestions = useMemo(() => {
     const rawList = data.map(row => String(row._rawRow ? row._rawRow[18] : '').trim()).filter(Boolean);
@@ -456,8 +489,8 @@ export default function App() {
         skipEmptyLines: true,
         delimiter: fetchUrl.includes('output=tsv') ? '\t' : undefined,
         complete: (results) => {
-          const rawRows = results.data as string[][];
-          if (rawRows.length < 2) {
+          const parsedRows = results.data as string[][];
+          if (parsedRows.length < 2) {
             setError('The source sheet data is insufficient (need at least 2 rows).');
             const elapsed = Date.now() - startTime;
             setTimeout(() => {
@@ -467,68 +500,7 @@ export default function App() {
             return;
           }
 
-          const headers = rawRows[1]; // Row 2 is headers
-          
-          const simpleIndices = [0, 1, 2, 6, 7, 10, 11, 14, 15, 18, 76];
-          const detailedIndices = [0, 1, 2, 6, 7, 8, 10, 11, 13, 14, 15, 17, 18, 22, 23, 24, 25, 26, 27, 28, 31, 32, 33, 34, 35, 36, 37, 76];
-          
-          let targetIndexes: number[];
-          if (reportType === 'simple') {
-            targetIndexes = simpleIndices;
-          } else if (reportType === 'detailed') {
-            targetIndexes = detailedIndices;
-          } else {
-            const indicesSet = new Set<number>();
-            CUSTOM_COLUMN_DEFS.forEach(def => {
-              if (enabledCustomColumns[def.id]) {
-                parseExcelRange(def.letters).forEach(idx => indicesSet.add(idx));
-              }
-            });
-            targetIndexes = Array.from(indicesSet).sort((a, b) => a - b);
-            if (targetIndexes.length === 0) {
-              targetIndexes = simpleIndices;
-            }
-          }
-          
-          const filteredColumns = targetIndexes.map(idx => ({
-            name: headers[idx] || `Col ${String.fromCharCode(65 + (idx % 26))}${idx >= 26 ? String.fromCharCode(65 + Math.floor(idx / 26) - 1) : ''}`,
-            enabled: true,
-            rawIndex: idx
-          }));
-          
-          setColumns(filteredColumns);
-          
-          const processedData = rawRows.slice(3) // Skip Rows 1, 2, 3 (index 0, 1, 2)
-            .filter(row => {
-              const colA = String(row[0] || '').trim();
-              const colB = String(row[1] || '').trim();
-              
-              // Skip if:
-              // - Col A is empty
-              // - Col A has SKIPROW
-              // - Col A has #N/A
-              // - Col B is blank
-              if (colA === '' || colA.includes('SKIPROW') || colA.includes('#N/A')) return false;
-              if (colB === '') return false;
-              
-              // Exclude all records with value 99 in column AM (index 38)
-              const colAM = String(row[38] || '').trim();
-              if (colAM === '99') return false;
-              
-              return true;
-            })
-            .map(row => {
-              const rowObj: any = { _rawRow: row };
-              targetIndexes.forEach((colIdx, listIdx) => {
-                const headerName = filteredColumns[listIdx].name;
-                rowObj[headerName] = row[colIdx] || '';
-              });
-              return rowObj;
-            });
-          
-          setData(processedData);
-          
-          findRecord(processedData, filteredColumns, searchKey, selectedGalaxy, selectedRegion, discovererName, surveyorName);
+          setRawRows(parsedRows);
           
           const elapsed = Date.now() - startTime;
           setTimeout(() => {
@@ -554,6 +526,83 @@ export default function App() {
       }, Math.max(0, 1500 - elapsed));
     }
   };
+
+  // Declarative effect to handle real-time Column toggles and formatting on state updates
+  useEffect(() => {
+    if (rawRows.length < 2) return;
+
+    const headers = rawRows[1]; // Row 2 is headers
+    
+    const simpleIndices = [0, 1, 2, 6, 7, 11, 14, 15, 18, 76];
+    const detailedIndices = [0, 1, 2, 6, 7, 8, 10, 11, 13, 14, 15, 17, 18, 22, 23, 24, 25, 26, 27, 28, 31, 32, 33, 34, 35, 36, 37, 76];
+    
+    let targetIndexes: number[];
+    if (reportType === 'simple') {
+      targetIndexes = simpleIndices;
+    } else if (reportType === 'detailed') {
+      targetIndexes = detailedIndices;
+    } else {
+      const indicesSet = new Set<number>();
+      CUSTOM_COLUMN_DEFS.forEach(def => {
+        if (enabledCustomColumns[def.id]) {
+          parseExcelRange(def.letters).forEach(idx => indicesSet.add(idx));
+        }
+      });
+      targetIndexes = Array.from(indicesSet).sort((a, b) => a - b);
+      if (targetIndexes.length === 0) {
+        targetIndexes = simpleIndices;
+      }
+    }
+    
+    const nameCounts = new Map<string, number>();
+    const baseNames = targetIndexes.map(idx => {
+      const hVal = headers[idx] ? headers[idx].trim() : '';
+      const name = hVal || getColLetter(idx);
+      nameCounts.set(name, (nameCounts.get(name) || 0) + 1);
+      return { idx, name };
+    });
+
+    const filteredColumns = baseNames.map(({ idx, name }) => {
+      const finalName = (nameCounts.get(name) || 0) > 1 
+        ? `${name} (${getColLetter(idx)})` 
+        : name;
+      return {
+        name: finalName,
+        enabled: true,
+        rawIndex: idx
+      };
+    });
+    
+    setColumns(filteredColumns);
+    
+    const processedData = rawRows.slice(3) // Skip Rows 1, 2, 3 (index 0, 1, 2)
+      .filter(row => {
+        const colA = String(row[0] || '').trim();
+        const colB = String(row[1] || '').trim();
+        
+        // Skip if:
+        // - Col A is empty
+        // - Col A has SKIPROW
+        // - Col A has #N/A
+        // - Col B is blank
+        if (colA === '' || colA.includes('SKIPROW') || colA.includes('#N/A')) return false;
+        if (colB === '') return false;
+        
+        return true;
+      })
+      .map(row => {
+        const rowObj: any = { _rawRow: row };
+        targetIndexes.forEach((colIdx, listIdx) => {
+          const headerName = filteredColumns[listIdx]?.name || getColLetter(colIdx);
+          rowObj[headerName] = row[colIdx] || '';
+        });
+        return rowObj;
+      });
+    
+    setData(processedData);
+    
+    findRecord(processedData, filteredColumns, searchKey, selectedGalaxy, selectedRegion, discovererName, surveyorName);
+  }, [rawRows, reportType, enabledCustomColumns, searchKey, selectedGalaxy, selectedRegion, discovererName, surveyorName]);
 
   const handleSearch = async () => {
     setSearchLoading(true);
@@ -662,27 +711,81 @@ export default function App() {
     if (sortedMatchedRecords.length === 0) return;
     
     const activeCols = columns.filter(col => col.enabled);
+    const URL_COL_INDICES = [76, 77, 78, 79, 80, 81, 105, 106, 107];
+
+    const getPdfColumnWidths = (cols: ColumnConfig[]): number[] => {
+      const baseWidths = cols.map(col => {
+        const idx = col.rawIndex;
+        if (idx === undefined) return 20;
+        if (URL_COL_INDICES.includes(idx)) return 10;
+        if (idx === 0) return 9;    // Galaxy (Index 0): compact
+        if (idx === 1) return 18;   // Region Name (Index 1): Col 2 reduced in width, can word-wrap
+        if (idx === 2) return 14;   // System Name (Index 2): Col 3
+        if (idx === 6) return 18;   // Original Name (Index 6): Col 7 reduced in width, can word-wrap
+        if (idx === 7) return 27;   // Galactic Coordinates (Index 7): Col 8 wide, guaranteed single line & fully visible!
+        if (idx === 8) return 20;   // Glyph Code (Index 8): Col 9 wide, guaranteed single line & fully visible!
+        if (idx === 10) return 11;  // Surveyor Name (Index 10)
+        if (idx === 11) return 11;  // Discoverer Name (Index 11)
+        if (idx === 14) return 16;  // Discovery Date (Index 14)
+        if (idx === 15) return 16;  // Survey Date (Index 15)
+        if (idx === 18) return 11;  // Civilized? (Index 18)
+        return 20;                  // default
+      });
+      
+      const sum = baseWidths.reduce((a, b) => a + b, 0) || 1;
+      return baseWidths.map(w => (w / sum) * 257);
+    };
+
+    const getPdfCellValue = (rawVal: any, colIdx: number | undefined): string => {
+      const isUrlCol = colIdx !== undefined && URL_COL_INDICES.includes(colIdx);
+      const isTargetBlueUrl = isTargetColumnWithUrl(colIdx, rawVal);
+      const isUrl = (colIdx !== undefined && colIdx >= 76 && colIdx <= 80) || String(rawVal || '').trim().startsWith('http');
+      
+      if (isUrlCol || isTargetBlueUrl || isUrl) {
+        return 'LINK';
+      }
+      
+      let val = getDisplayValue(rawVal, colIdx);
+      if (!val) return '-';
+      
+      const truncatableIndices = [2, 10, 11, 18];
+      if (colIdx !== undefined && truncatableIndices.includes(colIdx)) {
+        const len = val.length;
+        if (len > 10) {
+          const keepLen = Math.ceil(len * 0.75); // Keeps at least 75% of characters (max 25% truncation)
+          if (keepLen < len) {
+            val = val.substring(0, keepLen) + '...';
+          }
+        }
+      }
+      return val;
+    };
     
     // Check if any row in the PDF will wrap into more than 3 lines.
-    // Spec: "If it is not possible to generate a PDF where all individual rows will now fit in 3 lines or less, then display pop up an error box..."
     let exceedsThreeLines = false;
     
     if (activeCols.length > 13) {
       exceedsThreeLines = true;
     } else {
+      const widthsList = getPdfColumnWidths(activeCols);
       for (const record of sortedMatchedRecords) {
-        for (const col of activeCols) {
-          const val = getDisplayValue(record[col.name], col.rawIndex);
-          let colWidth = 257 / activeCols.length;
+        for (let i = 0; i < activeCols.length; i++) {
+          const col = activeCols[i];
+          const rawVal = record[col.name];
+          const val = getPdfCellValue(rawVal, col.rawIndex);
+          const colWidth = widthsList[i];
           
-          if (col.rawIndex === 76) colWidth = 12;
-          else if (col.rawIndex === 7) colWidth = 24;
-          else if (col.rawIndex === 1) colWidth = 35;
-          else if (col.rawIndex === 14 || col.rawIndex === 15) colWidth = 18;
+          const isUrlCol = col.rawIndex !== undefined && URL_COL_INDICES.includes(col.rawIndex);
+          const isSingleLineCol = isUrlCol || col.rawIndex === 7 || col.rawIndex === 8;
           
-          const charLimit = Math.max(5, Math.floor(colWidth / 1.5));
-          const lines = Math.ceil((val || '').length / charLimit) || 1;
-          if (lines > 3) {
+          let linesCount = 1;
+          if (!isSingleLineCol) {
+            const charLimit = Math.max(5, Math.floor(colWidth / 1.5));
+            const len = val.length;
+            linesCount = Math.ceil(len / charLimit) || 1;
+          }
+          
+          if (linesCount > 3) {
             exceedsThreeLines = true;
             break;
           }
@@ -795,14 +898,16 @@ export default function App() {
         const tableData = sortedMatchedRecords.map((record, rIdx) => 
           activeCols.map((col, cIdx) => {
             const rawVal = record[col.name];
-            const val = getDisplayValue(rawVal, col.rawIndex);
+            const val = getPdfCellValue(rawVal, col.rawIndex);
             
-            const isUrl = (col.rawIndex >= 76 && col.rawIndex <= 80) || String(rawVal || '').trim().startsWith('http');
-            if (isUrl && rawVal) {
+            const isUrlCol = col.rawIndex !== undefined && URL_COL_INDICES.includes(col.rawIndex);
+            const isTargetBlueUrl = isTargetColumnWithUrl(col.rawIndex, rawVal);
+            const isUrl = (col.rawIndex !== undefined && col.rawIndex >= 76 && col.rawIndex <= 80) || String(rawVal || '').trim().startsWith('http');
+            
+            if ((isUrlCol || isTargetBlueUrl || isUrl) && rawVal) {
               urlMap.set(`${rIdx}-${cIdx}`, String(rawVal).trim());
-              return 'LINK';
             }
-            return val || '-';
+            return val;
           })
         );
 
@@ -814,54 +919,26 @@ export default function App() {
         });
         tableData.push(totalRow);
 
-        // Compute Column Width overrides subject to rules:
-        // - Wiki (Col BY): slim width (10-12mm)
-        // - Region (Col B - Col 1): maximum 2 lines (custom styling width: 25mm)
-        // - Coordinate: maximum 1 line (width: 20mm, ellipsis overflow)
-        // - Discovery Date (index 14) and Surveyor Date (index 15): fit 1 line (width: 16mm)
-        // AND ensure the last column text field is not truncated in the produced reports, adjusting other column widths.
-        const lastColIdx = activeCols.length - 1;
+        const widthsList = getPdfColumnWidths(activeCols);
         const columnStyles: Record<number, any> = {};
         
-        let allocatedWidth = 0;
-        
         activeCols.forEach((col, idx) => {
-          if (idx === lastColIdx) {
-            // Last column: will be set precisely to remaining width and use linebreak overflow
-            columnStyles[idx] = { cellWidth: 'auto', overflow: 'linebreak' };
+          const w = widthsList[idx];
+          const isUrlCol = col.rawIndex !== undefined && URL_COL_INDICES.includes(col.rawIndex);
+          const isNoTruncateSingleLineCol = col.rawIndex === 7 || col.rawIndex === 8;
+          
+          if (isNoTruncateSingleLineCol) {
+            columnStyles[idx] = {
+              cellWidth: w,
+              overflow: 'visible'
+            };
           } else {
-            if (col.rawIndex === 76) {
-              columnStyles[idx] = { cellWidth: 10, overflow: 'ellipsize' };
-              allocatedWidth += 10;
-            } else if (col.rawIndex === 7) {
-              columnStyles[idx] = { cellWidth: 20, overflow: 'ellipsize' };
-              allocatedWidth += 20;
-            } else if (col.rawIndex === 1) {
-              columnStyles[idx] = { cellWidth: 25, overflow: 'ellipsize' };
-              allocatedWidth += 25;
-            } else if (col.rawIndex === 14 || col.rawIndex === 15) {
-              columnStyles[idx] = { cellWidth: 16, overflow: 'ellipsize' };
-              allocatedWidth += 16;
-            } else {
-              const qtyOtherStandardCols = activeCols.filter((c, i) => 
-                i !== lastColIdx && c.rawIndex !== 76 && c.rawIndex !== 7 && c.rawIndex !== 1 && c.rawIndex !== 14 && c.rawIndex !== 15
-              ).length || 1;
-              
-              const totalForOtherStandards = 257 - allocatedWidth - 45 - (activeCols.filter((c, i) => i !== lastColIdx && (c.rawIndex === 76 || c.rawIndex === 7 || c.rawIndex === 1 || c.rawIndex === 14 || c.rawIndex === 15)).length * 15);
-              const computedStandardColWidth = Math.max(12, Math.floor(totalForOtherStandards / qtyOtherStandardCols));
-              columnStyles[idx] = { cellWidth: computedStandardColWidth, overflow: 'ellipsize' };
-            }
+            columnStyles[idx] = {
+              cellWidth: w,
+              overflow: isUrlCol ? 'ellipsize' : 'linebreak'
+            };
           }
         });
-        
-        // Resolve reserved last column width beautifully
-        const reservedLastWidth = Math.max(45, 257 - activeCols.reduce((sum, col, idx) => {
-          if (idx === lastColIdx) return sum;
-          const cw = columnStyles[idx]?.cellWidth;
-          return sum + (typeof cw === 'number' ? cw : 15);
-        }, 0));
-        
-        columnStyles[lastColIdx] = { cellWidth: reservedLastWidth, overflow: 'linebreak' };
 
         autoTable(doc, {
           startY: 25,
@@ -873,11 +950,14 @@ export default function App() {
           body: tableData,
           theme: 'grid',
           columnStyles: columnStyles,
-          headStyles: { fillColor: [20, 20, 20], textColor: [255, 255, 255], fontSize: 8 },
+          headStyles: { fillColor: [20, 20, 20], textColor: [255, 255, 255], fontSize: 8, overflow: 'linebreak' },
           bodyStyles: { fontSize: 8 },
           footStyles: { fillColor: [240, 240, 240], textColor: [0, 0, 0], fontStyle: 'bold' },
           margin: { top: 25, bottom: 20, left: 20, right: 20 },
           didParseCell: (dataCell) => {
+            if (dataCell.section === 'head') {
+              dataCell.cell.styles.overflow = 'linebreak';
+            }
             if (dataCell.row.index === tableData.length - 1) {
               dataCell.cell.styles.fillColor = [220, 220, 220];
               dataCell.cell.styles.fontStyle = 'bold';
@@ -1223,8 +1303,7 @@ export default function App() {
                 {/* Civilization Autocomplete */}
                 <div className="space-y-2">
                   <div className="space-y-1 text-left ml-1 select-none">
-                    <p className="text-[#FFB451] text-[10px] font-bold tracking-widest uppercase">{t("Criteria 1")}</p>
-                    <p className="text-[#FFB451] text-xs font-bold tracking-widest uppercase">{t("Select Civilization")}</p>
+                    <p className="text-[#FFB451] text-xs font-bold tracking-widest uppercase">{t("Civilization")}</p>
                   </div>
                   <AutocompleteInput
                     id="civilization-select"
@@ -1244,8 +1323,7 @@ export default function App() {
                 {/* Galaxy Autocomplete */}
                 <div className="space-y-2">
                   <div className="space-y-1 text-left ml-1 select-none">
-                    <p className="text-[#FFB451] text-[10px] font-bold tracking-widest uppercase">{t("Criteria 2")}</p>
-                    <p className="text-[#FFB451] text-xs font-bold tracking-widest uppercase">{t("Preferred Galaxy")}</p>
+                    <p className="text-[#FFB451] text-xs font-bold tracking-widest uppercase">{t("Galaxy")}</p>
                   </div>
                   <AutocompleteInput
                     id="galaxy-select"
@@ -1260,23 +1338,12 @@ export default function App() {
                     placeholder={t("Enter/Choose Galaxy...")}
                     icon={<Globe className="h-5 w-5" />}
                   />
-                  <div className="mt-1 ml-4 text-center md:text-left">
-                    <a 
-                      href="https://nomanssky.fandom.com/wiki/Galaxy" 
-                      target="_blank" 
-                      rel="noopener noreferrer"
-                      className="text-[9px] text-[#FFB451]/50 hover:text-[#FFB451] underline transition-colors font-mono uppercase"
-                    >
-                      {t("Galaxy Directory")}
-                    </a>
-                  </div>
                 </div>
 
                 {/* Region Autocomplete */}
                 <div className="space-y-2">
                   <div className="space-y-1 text-left ml-1 select-none">
-                    <p className="text-[#FFB451] text-[10px] font-bold tracking-widest uppercase">{t("Criteria 3")}</p>
-                    <p className="text-[#FFB451] text-xs font-bold tracking-widest uppercase">{t("Preferred Region")}</p>
+                    <p className="text-[#FFB451] text-xs font-bold tracking-widest uppercase">{t("Region")}</p>
                   </div>
                   <AutocompleteInput
                     id="region-select"
@@ -1299,7 +1366,6 @@ export default function App() {
                 {/* Discoverer Autocomplete (Optional) */}
                 <div className="space-y-2">
                   <div className="space-y-1 text-left ml-1 select-none">
-                    <p className="text-[#FFB451] text-[10px] font-bold tracking-widest uppercase opacity-75">{t("Criteria 4 (Opt)")}</p>
                     <p className="text-[#FFB451] text-xs font-bold tracking-widest uppercase opacity-75 font-bold">{t("Discoverer Name")}</p>
                   </div>
                   <AutocompleteInput
@@ -1320,7 +1386,6 @@ export default function App() {
                 {/* Surveyor Autocomplete (Optional) */}
                 <div className="space-y-2">
                   <div className="space-y-1 text-left ml-1 select-none">
-                    <p className="text-[#FFB451] text-[10px] font-bold tracking-widest uppercase opacity-75">{t("Criteria 5 (Opt)")}</p>
                     <p className="text-[#FFB451] text-xs font-bold tracking-widest uppercase opacity-75 font-bold">{t("Surveyor Name")}</p>
                   </div>
                   <AutocompleteInput
@@ -1353,13 +1418,13 @@ export default function App() {
 
               <button
                 onClick={() => {
-                  setSearchKey('All');
-                  setSelectedGalaxy('All');
-                  setSelectedRegion('All');
+                  setSearchKey('');
+                  setSelectedGalaxy('');
+                  setSelectedRegion('');
                   setDiscovererName('');
                   setSurveyorName('');
                   if (data.length) {
-                    findRecord(data, columns, 'All', 'All', 'All', '', '');
+                    findRecord(data, columns, '', '', '', '', '');
                   }
                 }}
                 className="px-6 py-3.5 border border-[#FF0500]/40 bg-[#FF0500]/10 text-[#FFB451] hover:bg-[#FF0500]/20 rounded-full text-[10px] uppercase tracking-widest font-bold transition-all active:scale-[0.95] flex items-center gap-2 shadow-[0_4px_10px_rgba(255,5,0,0.05)]"
@@ -1527,7 +1592,7 @@ export default function App() {
                                 });
                                 setEnabledCustomColumns(cleared);
                               }}
-                              className="px-4 py-2 border border-[#FF0500] bg-[#E25530] text-white hover:bg-[#E25530]/90 rounded-lg text-[9px] uppercase font-black tracking-widest transition shadow-[0_2px_10px_rgba(226,85,48,0.2)] active:scale-95 self-start sm:self-center"
+                              className="px-4 py-2 border border-[#FF0500] bg-[#E25530] text-white hover:bg-[#E25530]/90 rounded-lg text-[10px] uppercase font-black tracking-widest transition shadow-[0_2px_10px_rgba(226,85,48,0.2)] active:scale-95 self-start sm:self-center"
                               id="clear-all-toggles-btn"
                             >
                               {t("Clear All")}
@@ -1545,7 +1610,7 @@ export default function App() {
                                       [def.id]: !prev[def.id]
                                     }));
                                   }}
-                                  className={`py-1 px-1.5 rounded transition-all flex items-center justify-between text-white border text-[7px] font-mono leading-none ${
+                                  className={`py-1 px-1.5 rounded transition-all flex items-center justify-between text-white border text-[8px] font-mono leading-none ${
                                     isEnabled 
                                       ? 'bg-[#E25530] border-[#FF0500] shadow-[0_0_5px_rgba(226,85,48,0.3)] font-extrabold' 
                                       : 'bg-[#E25530]/5 border-[#FF0500]/15 opacity-40 hover:opacity-100'
@@ -1553,8 +1618,8 @@ export default function App() {
                                   id={`custom-col-${def.id}-btn`}
                                   title={translateColumnHeader(def.label, language)}
                                 >
-                                  <span className="truncate mr-0.5 text-[7px] font-medium font-sans uppercase">{translateColumnHeader(def.label, language)}</span>
-                                  <span className="shrink-0 text-[6px] px-0.5 py-px rounded bg-black/40 text-white leading-none scale-90">
+                                  <span className="truncate mr-0.5 text-[8px] font-medium font-sans uppercase">{translateColumnHeader(def.label, language)}</span>
+                                  <span className="shrink-0 text-[7px] px-0.5 py-px rounded bg-black/40 text-white leading-none scale-90">
                                     {isEnabled ? 'ON' : 'OFF'}
                                   </span>
                                 </button>
@@ -1662,13 +1727,13 @@ export default function App() {
                                     }
                                     setCurrentPage(1);
                                   }}
-                                  className="py-1 px-2 text-[8px] uppercase tracking-widest font-black text-[#FFB451] whitespace-nowrap sticky top-0 z-10 bg-[#1c1c1c] border-b border-[#FF0500]/20 cursor-pointer select-none hover:bg-black/40 group/th transition-all"
+                                  className="py-1 px-2 text-[8px] uppercase tracking-widest font-black text-[#FFB451] whitespace-normal sticky top-0 z-10 bg-[#1c1c1c] border-b border-[#FF0500]/20 cursor-pointer select-none hover:bg-black/40 group/th transition-all min-w-[70px]"
                                   id={`sort-th-${col.rawIndex}`}
                                   title={t("Click to sort")}
                                 >
-                                  <div className="flex items-center gap-1.5 justify-between">
-                                    <span>{translatedDisplayName}</span>
-                                    <span className="text-[#FF0500] font-mono text-[9px] select-none flex items-center shrink-0">
+                                  <div className="flex items-start gap-1.5 justify-between">
+                                    <span className="line-clamp-3 break-normal">{translatedDisplayName}</span>
+                                    <span className="text-[#FF0500] font-mono text-[9px] select-none flex items-center shrink-0 mt-0.5">
                                       {sortColumn === col.name ? (
                                         sortDirection === 'asc' ? '▲' : '▼'
                                       ) : (
@@ -1687,10 +1752,20 @@ export default function App() {
                               {columns.filter(col => col.enabled).map((col, cIdx) => {
                                 const rawVal = record[col.name];
                                 const displayVal = getDisplayValue(rawVal, col.rawIndex);
+                                const isTargetBlueUrl = isTargetColumnWithUrl(col.rawIndex, rawVal);
                                 const isUrl = (col.rawIndex >= 76 && col.rawIndex <= 80) || String(rawVal || '').trim().startsWith('http');
                                 return (
                                   <td key={cIdx} className="py-0.5 px-2 text-[10px] text-[#FFB451] font-mono whitespace-nowrap overflow-hidden text-ellipsis max-w-[200px]">
-                                    {isUrl && rawVal ? (
+                                    {isTargetBlueUrl ? (
+                                      <a
+                                        href={String(rawVal).trim()}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className="text-[#4da6ff] hover:text-[#80c2ff] font-bold underline transition-colors"
+                                      >
+                                        LINK
+                                      </a>
+                                    ) : isUrl && rawVal ? (
                                       <a
                                         href={String(rawVal).trim()}
                                         target="_blank"
@@ -1802,15 +1877,16 @@ export default function App() {
                     )}
  
                     <div className="p-6 border-t border-agt-orange/5 flex flex-col md:flex-row items-center justify-between gap-6 bg-agt-orange/[0.01]">
-                      <div className="flex items-center gap-4">
-                        <div className="flex items-center gap-2">
-                          <div className="w-1.5 h-1.5 rounded-full bg-agt-orange shadow-[0_0_8px_rgba(255,180,81,0.4)]"></div>
-                          <span className="text-[9px] uppercase tracking-widest text-agt-orange font-bold">{t("Ledger Integrity: Verified")}</span>
+                      <div className="flex items-center gap-2">
+                        <div className="relative flex h-2 w-2">
+                          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#00FF66] opacity-75"></span>
+                          <span className="relative inline-flex rounded-full h-2 w-2 bg-[#00FF66] shadow-[0_0_8px_rgba(0,255,102,0.6)]"></span>
                         </div>
-                        <span className="text-[9px] font-mono text-agt-orange uppercase tracking-widest hidden md:inline">
-                          {t("Index Reference: ")}{Math.random().toString(16).substring(2, 8).toUpperCase()}
-                        </span>
+                        <span className="text-[9px] uppercase tracking-widest text-agt-orange font-bold">{t("Ledger Integrity: Verified")}</span>
                       </div>
+                      <span className="text-[9px] font-mono text-agt-orange uppercase tracking-widest md:text-right select-none opacity-90">
+                        {t("AGT SECURE ARCHIVE CLIENT")}
+                      </span>
                     </div>
                   </motion.section>
                 ) : !loading && (
