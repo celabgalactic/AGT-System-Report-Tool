@@ -1405,6 +1405,86 @@ export default function App() {
     return sortedMatchedRecords.slice(startIdx, startIdx + pageSize);
   }, [sortedMatchedRecords, currentPage, pageSize]);
 
+  const omittedCount = useMemo(() => {
+    if (!rawRows || rawRows.length < 4) return 0;
+    
+    const allowedLvl = savedSecurityLevel !== null ? savedSecurityLevel : 0;
+    
+    const currentCivTerm = searchKey.trim().toLowerCase();
+    const currentGalTerm = selectedGalaxy.trim().toLowerCase();
+    const currentRegionTerm = selectedRegion.trim().toLowerCase();
+    const currentDiscTerm = discovererName.trim().toLowerCase();
+    const currentSurvTerm = surveyorName.trim().toLowerCase();
+
+    let count = 0;
+
+    // Skip Rows 1, 2, 3 (index 0, 1, 2)
+    const validRows = rawRows.slice(3);
+    for (const row of validRows) {
+      const colA = String(row[0] || '').trim();
+      const colB = String(row[1] || '').trim();
+      
+      if (colA === '' || colA.includes('SKIPROW') || colA.includes('#N/A')) continue;
+      if (colB === '') continue;
+
+      // Check search match (following findRecord criteria exactly)
+      const cVal = String(row[18] || '').trim(); // Civ
+      const gVal = String(row[0] || '').trim();  // Galaxy
+      const rVal = String(row[1] || '').trim();  // Region
+      const dVal = String(row[11] || '').trim(); // Discoverer
+      const kVal = String(row[10] || '').trim(); // Surveyor
+
+      // Check Civ
+      let civMatch = false;
+      if (!currentCivTerm || currentCivTerm === 'all') {
+        civMatch = true;
+      } else if (currentCivTerm === 'none') {
+        civMatch = cVal === '';
+      } else {
+        const mappedTerm = currentCivTerm === 'agt' ? 'alliance of galactic travellers' : currentCivTerm;
+        civMatch = cVal.toLowerCase().includes(mappedTerm);
+      }
+
+      // Check Galaxy
+      let galMatch = false;
+      if (!currentGalTerm || currentGalTerm === 'all') {
+        galMatch = true;
+      } else {
+        galMatch = gVal.toLowerCase().includes(currentGalTerm);
+      }
+
+      // Check Region
+      let regMatch = false;
+      if (!currentRegionTerm || currentRegionTerm === 'all') {
+        regMatch = true;
+      } else {
+        regMatch = rVal.toLowerCase().includes(currentRegionTerm);
+      }
+
+      // Check Discoverer
+      let discMatch = true;
+      if (currentDiscTerm && currentDiscTerm !== 'all') {
+        discMatch = dVal.toLowerCase().includes(currentDiscTerm);
+      }
+
+      // Check Surveyor
+      let survMatch = true;
+      if (currentSurvTerm && currentSurvTerm !== 'all') {
+        survMatch = kVal.toLowerCase().includes(currentSurvTerm);
+      }
+
+      if (civMatch && galMatch && regMatch && discMatch && survMatch) {
+        // It matches the search query! Now check if it is omitted solely due to security level
+        const securityVal = row[109] || '';
+        const rowSecurityLvl = getSecurityLevelNum(securityVal);
+        if (rowSecurityLvl > allowedLvl) {
+          count++;
+        }
+      }
+    }
+    return count;
+  }, [rawRows, searchKey, selectedGalaxy, selectedRegion, discovererName, surveyorName, savedSecurityLevel]);
+
   const multiplier = parseFloat(fontScale.replace('x', '')) || 1.0;
 
   return (
@@ -1517,6 +1597,22 @@ export default function App() {
                 {loading ? t('SYNCING') : sheetUrl ? t('CONNECTED') : t('DISCONNECTED')}
               </span>
             </div>
+            {savedTravellerName && savedTravellerId ? (
+              <div 
+                className="border border-green-500 text-green-500 rounded-lg px-2.5 py-1 text-[11px] font-mono tracking-wider bg-green-950/20 select-none max-w-[150px] truncate"
+                id="header-traveller-display"
+                title={savedTravellerName}
+              >
+                {savedTravellerName.slice(0, 20)}
+              </div>
+            ) : (
+              <div 
+                className="border border-[#FF0500] text-[#FF0500] rounded-lg px-2.5 py-1 text-[11px] font-mono tracking-wider bg-red-950/20 select-none"
+                id="header-traveller-display"
+              >
+                {t("Public User")}
+              </div>
+            )}
             <motion.button 
               onClick={() => setShowSettings(!showSettings)}
               className="p-2 hover:bg-[#FF0500]/5 rounded-lg transition-colors relative group text-[#FF0500]"
@@ -2058,13 +2154,18 @@ export default function App() {
                     className="bg-[#111111] border-2 border-[#FF0500] rounded-2xl overflow-hidden shadow-[0_0_30px_rgba(255,5,0,0.15)]"
                   >
                     <div className="p-8 border-b border-[#FF0500]/20 flex flex-col md:flex-row md:items-center justify-between gap-6 bg-[#161616]">
-                      <div className="space-y-1">
+                      <div className="space-y-1.5">
                         <h3 className="text-xl font-medium text-white flex items-center gap-3">
                           {t("AGT Galactic Archives Results")}
                           <span className="px-2 py-0.5 rounded-full bg-[#E25530]/10 text-white border border-[#FF0500]/40 font-mono text-[10px]">
                             {matchedRecords.length} {t("FOUND")}
                           </span>
                         </h3>
+                        <div className="flex items-center">
+                          <span className="px-2 py-0.5 rounded-full bg-[#E25530]/10 text-white border border-[#FF0500]/40 font-mono text-[10px]">
+                            {t("Classified Records Omitted:")} {omittedCount}
+                          </span>
+                        </div>
                         <p className="text-[10px] text-white/60 uppercase tracking-[0.2em]">{t("Verified Galactic Ledger Matches")}</p>
                       </div>
  
