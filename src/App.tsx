@@ -433,6 +433,29 @@ export default function App() {
   const [savedTravellerId, setSavedTravellerId] = useState<string | null>(null);
   const [savedSecurityLevel, setSavedSecurityLevel] = useState<number | null>(null);
 
+  const [omitPublicRecords, setOmitPublicRecords] = useState(false);
+  const [omitPrivateRecords, setOmitPrivateRecords] = useState(false);
+
+  const handleToggleOmitPublic = () => {
+    setOmitPublicRecords(prev => {
+      const nextVal = !prev;
+      if (nextVal) {
+        setOmitPrivateRecords(false);
+      }
+      return nextVal;
+    });
+  };
+
+  const handleToggleOmitPrivate = () => {
+    setOmitPrivateRecords(prev => {
+      const nextVal = !prev;
+      if (nextVal) {
+        setOmitPublicRecords(false);
+      }
+      return nextVal;
+    });
+  };
+
   const [enteredName, setEnteredName] = useState('');
   const [enteredId, setEnteredId] = useState('');
   const [isVerifying, setIsVerifying] = useState(false);
@@ -741,6 +764,16 @@ export default function App() {
         const allowedLvl = savedSecurityLevel !== null ? savedSecurityLevel : 0;
         if (rowSecurityLvl > allowedLvl) return false;
         
+        const hasCredentials = !!(savedTravellerName && savedTravellerId);
+        if (hasCredentials) {
+          if (omitPublicRecords && rowSecurityLvl === 0) {
+            return false;
+          }
+          if (omitPrivateRecords && rowSecurityLvl > 0) {
+            return false;
+          }
+        }
+        
         return true;
       })
       .map(({ row, originalIndex }) => {
@@ -755,7 +788,7 @@ export default function App() {
     setData(processedData);
     
     findRecord(processedData, filteredColumns, searchKey, selectedGalaxy, selectedRegion, discovererName, surveyorName);
-  }, [rawRows, reportType, enabledCustomColumns, searchKey, selectedGalaxy, selectedRegion, discovererName, surveyorName, savedSecurityLevel]);
+  }, [rawRows, reportType, enabledCustomColumns, searchKey, selectedGalaxy, selectedRegion, discovererName, surveyorName, savedSecurityLevel, omitPublicRecords, omitPrivateRecords, savedTravellerName, savedTravellerId]);
 
   const handleSearch = async () => {
     setSearchLoading(true);
@@ -966,7 +999,25 @@ export default function App() {
       try {
         const doc = new jsPDF('l', 'mm', 'a4'); // Landscape for tables
 
+        // Find the highest security level contained in the report records
+        let maxSecurityLevelNum = 0;
+        sortedMatchedRecords.forEach(record => {
+          const secVal = record._rawRow ? record._rawRow[109] : '';
+          const lvlNum = getSecurityLevelNum(secVal);
+          if (lvlNum > maxSecurityLevelNum) {
+            maxSecurityLevelNum = lvlNum;
+          }
+        });
+
         // --- 1. COVER PAGE (Page 1) ---
+        if (maxSecurityLevelNum > 0) {
+          doc.setFont("Helvetica", "bold");
+          doc.setFontSize(14);
+          doc.setTextColor(255, 5, 0); // Hex color FF0500
+          const levelName = getSecurityLevelLabel(maxSecurityLevelNum);
+          doc.text(`This report contains ${levelName} Intelligence`, 148.5, 30, { align: 'center' });
+        }
+
         // Title in hex color FF0500 (RGB: 255, 5, 0), horizontally centered under AGTIcon
         doc.setFont("Helvetica", "bold");
         doc.setFontSize(26);
@@ -1346,6 +1397,9 @@ export default function App() {
     const testName = getCookie('agt_traveller_name');
     const testId = getCookie('agt_traveller_id');
 
+    setOmitPublicRecords(false);
+    setOmitPrivateRecords(false);
+
     if (testName === null && testId === null) {
       setSavedTravellerName(null);
       setSavedTravellerId(null);
@@ -1409,6 +1463,10 @@ export default function App() {
     if (!rawRows || rawRows.length < 4) return 0;
     
     const allowedLvl = savedSecurityLevel !== null ? savedSecurityLevel : 0;
+    const hasCredentials = !!(savedTravellerName && savedTravellerId);
+    
+    // If omitPrivateRecords is true, all records with security classification higher than 0 are omitted.
+    const effectiveAllowedLvl = (hasCredentials && omitPrivateRecords) ? 0 : allowedLvl;
     
     const currentCivTerm = searchKey.trim().toLowerCase();
     const currentGalTerm = selectedGalaxy.trim().toLowerCase();
@@ -1477,13 +1535,13 @@ export default function App() {
         // It matches the search query! Now check if it is omitted solely due to security level
         const securityVal = row[109] || '';
         const rowSecurityLvl = getSecurityLevelNum(securityVal);
-        if (rowSecurityLvl > allowedLvl) {
+        if (rowSecurityLvl > effectiveAllowedLvl) {
           count++;
         }
       }
     }
     return count;
-  }, [rawRows, searchKey, selectedGalaxy, selectedRegion, discovererName, surveyorName, savedSecurityLevel]);
+  }, [rawRows, searchKey, selectedGalaxy, selectedRegion, discovererName, surveyorName, savedSecurityLevel, omitPrivateRecords, savedTravellerName, savedTravellerId]);
 
   const multiplier = parseFloat(fontScale.replace('x', '')) || 1.0;
 
@@ -1723,6 +1781,32 @@ export default function App() {
                     placeholder={t("Enter/Choose Galaxy...")}
                     icon={<Globe className="h-5 w-5" />}
                   />
+                  {((savedTravellerName && savedTravellerId) || (getCookie('agt_traveller_name') && getCookie('agt_traveller_id'))) && (
+                    <div className="flex flex-col gap-2 mt-2 px-1.5 py-1 bg-black/40 border border-[#FF0500]/15 rounded-xl" id="security-omits-box">
+                      <div className="flex items-center gap-4">
+                        <label id="omit-public-label" className="flex items-center gap-2 cursor-pointer select-none text-[9px] text-[#FFB451]/80 font-mono hover:text-[#FFB451] transition">
+                          <input
+                            id="omit-public-checkbox"
+                            type="checkbox"
+                            checked={omitPublicRecords}
+                            onChange={handleToggleOmitPublic}
+                            className="w-3.5 h-3.5 accent-[#FF0500] bg-black/40 border border-[#FF0500]/30 rounded focus:ring-0 focus:outline-none"
+                          />
+                          <span>{t("Omit Public Records")}</span>
+                        </label>
+                        <label id="omit-private-label" className="flex items-center gap-2 cursor-pointer select-none text-[9px] text-[#FFB451]/80 font-mono hover:text-[#FFB451] transition">
+                          <input
+                            id="omit-private-checkbox"
+                            type="checkbox"
+                            checked={omitPrivateRecords}
+                            onChange={handleToggleOmitPrivate}
+                            className="w-3.5 h-3.5 accent-[#FF0500] bg-black/40 border border-[#FF0500]/30 rounded focus:ring-0 focus:outline-none"
+                          />
+                          <span>{t("Omit Private Records")}</span>
+                        </label>
+                      </div>
+                    </div>
+                  )}
                 </div>
 
                 {/* Region Autocomplete */}
