@@ -13,6 +13,7 @@ import {
   Database, 
   AlertCircle, 
   ChevronRight, 
+  ChevronDown,
   Table, 
   Columns,
   RefreshCw,
@@ -298,6 +299,32 @@ const getSecurityLevelLabel = (level: number | null): string => {
   return 'Public';
 };
 
+const getLevelColor = (level: number | null): string => {
+  const lvl = level !== null ? level : 0;
+  switch (lvl) {
+    case 0: return 'rgb(42, 255, 0)';
+    case 1: return 'rgb(0, 244, 255)';
+    case 2: return 'rgb(241, 152, 226)';
+    case 3: return 'rgb(253, 3, 3)';
+    case 4: return 'rgb(255, 147, 0)';
+    case 5: return 'rgb(50, 135, 240)';
+    default: return 'rgb(42, 255, 0)';
+  }
+};
+
+const getLevelBgColor = (level: number | null): string => {
+  const lvl = level !== null ? level : 0;
+  switch (lvl) {
+    case 0: return 'rgba(42, 255, 0, 0.1)';
+    case 1: return 'rgba(0, 244, 255, 0.1)';
+    case 2: return 'rgba(241, 152, 226, 0.1)';
+    case 3: return 'rgba(253, 3, 3, 0.1)';
+    case 4: return 'rgba(255, 147, 0, 0.1)';
+    case 5: return 'rgba(50, 135, 240, 0.1)';
+    default: return 'rgba(42, 255, 0, 0.1)';
+  }
+};
+
 export default function App() {
   const [reportType, setReportType] = useState<ReportType>('simple');
   const [sheetUrl, setSheetUrl] = useState<string>(() => {
@@ -432,6 +459,7 @@ export default function App() {
   const [savedTravellerName, setSavedTravellerName] = useState<string | null>(null);
   const [savedTravellerId, setSavedTravellerId] = useState<string | null>(null);
   const [savedSecurityLevel, setSavedSecurityLevel] = useState<number | null>(null);
+  const [customColumnsExpanded, setCustomColumnsExpanded] = useState(false);
 
   const [omitPublicRecords, setOmitPublicRecords] = useState(false);
   const [omitPrivateRecords, setOmitPrivateRecords] = useState(false);
@@ -1657,7 +1685,12 @@ export default function App() {
             </div>
             {savedTravellerName && savedTravellerId ? (
               <div 
-                className="border border-green-500 text-green-500 rounded-lg px-2.5 py-1 text-[11px] font-mono tracking-wider bg-green-950/20 select-none max-w-[150px] truncate"
+                className="border rounded-lg px-2.5 py-1 text-[11px] font-mono tracking-wider select-none max-w-[150px] truncate"
+                style={{
+                  borderColor: getLevelColor(savedSecurityLevel),
+                  color: getLevelColor(savedSecurityLevel),
+                  backgroundColor: getLevelBgColor(savedSecurityLevel)
+                }}
                 id="header-traveller-display"
                 title={savedTravellerName}
               >
@@ -1665,7 +1698,12 @@ export default function App() {
               </div>
             ) : (
               <div 
-                className="border border-[#FF0500] text-[#FF0500] rounded-lg px-2.5 py-1 text-[11px] font-mono tracking-wider bg-red-950/20 select-none"
+                className="border rounded-lg px-2.5 py-1 text-[11px] font-mono tracking-wider select-none"
+                style={{
+                  borderColor: getLevelColor(0),
+                  color: getLevelColor(0),
+                  backgroundColor: getLevelBgColor(0)
+                }}
                 id="header-traveller-display"
               >
                 {t("Public User")}
@@ -2023,78 +2061,80 @@ export default function App() {
                           </div>
                         </div>
 
-                        {/* AGT Anthem (Audio Section) */}
-                        <div className="col-span-1 md:col-span-2 lg:col-span-3 pt-8 border-t border-[#FF0500]/20 space-y-4">
-                          <div className="flex items-center justify-between">
-                            <div className="space-y-1">
-                              <h3 className="text-[10px] uppercase tracking-widest font-bold text-[#FFB451] flex items-center gap-2">
-                                <Volume2 className="w-3 h-3" />
-                                {t("AGT Anthem")}
-                              </h3>
-                            </div>
-                            <button 
-                              onClick={() => setAudioEnabled(!audioEnabled)}
-                              className="flex items-center gap-3 px-6 py-3 rounded-xl border border-[#FF0500] bg-[#E25530] text-white transition-all text-[10px] uppercase tracking-widest font-bold hover:bg-[#E25530]/90"
-                              id="audio-toggle-btn"
-                            >
-                              {audioEnabled ? <Volume2 className="w-3.5 h-3.5" /> : <VolumeX className="w-3.5 h-3.5" />}
-                              {audioEnabled ? t('Active') : t('Muted')}
-                            </button>
-                          </div>
-                        </div>
-
                         {/* Custom Report Columns Section */}
                         <div className="col-span-1 md:col-span-2 lg:col-span-3 pt-8 border-t border-[#FF0500]/20 space-y-4">
-                          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                          <button
+                            type="button"
+                            onClick={() => setCustomColumnsExpanded(prev => !prev)}
+                            className="w-full flex items-center justify-between text-left focus:outline-none group/curtain cursor-pointer"
+                            id="custom-columns-curtain-toggle"
+                          >
                             <div className="space-y-1">
-                              <h3 className="text-[10px] uppercase tracking-widest font-bold text-[#FFB451] flex items-center gap-2">
+                              <h3 className="text-[10px] uppercase tracking-widest font-bold text-[#FFB451] flex items-center gap-2 group-hover/curtain:text-[#E25530] transition-colors">
                                 <Columns className="w-3 h-3" />
                                 {t("Custom Report Columns")}
                               </h3>
-                              <p className="text-[10px] text-[#FFB451]/60 font-mono tracking-wide">{t("Toggle columns to appear in the new custom report format")}</p>
                             </div>
-                            <button
-                              onClick={() => {
-                                const cleared: Record<string, boolean> = {};
-                                CUSTOM_COLUMN_DEFS.forEach(def => {
-                                  cleared[def.id] = false;
-                                });
-                                setEnabledCustomColumns(cleared);
-                              }}
-                              className="px-4 py-2 border border-[#FF0500] bg-[#E25530] text-white hover:bg-[#E25530]/90 rounded-lg text-[10px] uppercase font-black tracking-widest transition shadow-[0_2px_10px_rgba(226,85,48,0.2)] active:scale-95 self-start sm:self-center"
-                              id="clear-all-toggles-btn"
-                            >
-                              {t("Clear All")}
-                            </button>
-                          </div>
-                          <div className="grid grid-cols-4 sm:grid-cols-5 md:grid-cols-6 lg:grid-cols-8 gap-1 max-h-52 overflow-y-auto p-2 bg-black/40 border border-[#FF0500]/50 rounded-xl settings-scrollbar">
-                            {CUSTOM_COLUMN_DEFS.map(def => {
-                              const isEnabled = enabledCustomColumns[def.id];
-                              return (
-                                <button
-                                  key={def.id}
-                                  onClick={() => {
-                                    setEnabledCustomColumns(prev => ({
-                                      ...prev,
-                                      [def.id]: !prev[def.id]
-                                    }));
-                                  }}
-                                  className={`py-1 px-1.5 rounded transition-all flex items-center justify-between text-white border text-[8px] font-mono leading-none ${
-                                    isEnabled 
-                                      ? 'bg-[#E25530] border-[#FF0500] shadow-[0_0_5px_rgba(226,85,48,0.3)] font-extrabold' 
-                                      : 'bg-[#E25530]/5 border-[#FF0500]/15 opacity-40 hover:opacity-100'
-                                  }`}
-                                  id={`custom-col-${def.id}-btn`}
-                                  title={translateColumnHeader(def.label, language)}
-                                >
-                                  <span className="truncate mr-0.5 text-[8px] font-medium font-sans uppercase">{translateColumnHeader(def.label, language)}</span>
-                                  <span className="shrink-0 text-[7px] px-0.5 py-px rounded bg-black/40 text-white leading-none scale-90">
-                                    {isEnabled ? 'ON' : 'OFF'}
-                                  </span>
-                                </button>
-                              );
-                            })}
-                          </div>
+                            <div className="text-[#FFB451]/60 group-hover/curtain:text-[#E25530] transition-colors">
+                              <ChevronDown className={`w-5 h-5 transform transition-transform duration-300 ${customColumnsExpanded ? 'rotate-180' : ''}`} />
+                            </div>
+                          </button>
+
+                          <AnimatePresence initial={false}>
+                            {customColumnsExpanded && (
+                              <motion.div
+                                initial={{ height: 0, opacity: 0 }}
+                                animate={{ height: 'auto', opacity: 1 }}
+                                exit={{ height: 0, opacity: 0 }}
+                                transition={{ duration: 0.25, ease: "easeInOut" }}
+                                className="overflow-hidden space-y-4"
+                              >
+                                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-2">
+                                  <button
+                                    onClick={() => {
+                                      const cleared: Record<string, boolean> = {};
+                                      CUSTOM_COLUMN_DEFS.forEach(def => {
+                                        cleared[def.id] = false;
+                                      });
+                                      setEnabledCustomColumns(cleared);
+                                    }}
+                                    className="px-4 py-2 border border-[#FF0500] bg-[#E25530] text-white hover:bg-[#E25530]/90 rounded-lg text-[10px] uppercase font-black tracking-widest transition shadow-[0_2px_10px_rgba(226,85,48,0.2)] active:scale-95 ml-auto self-start sm:self-center"
+                                    id="clear-all-toggles-btn"
+                                  >
+                                    {t("Clear All")}
+                                  </button>
+                                </div>
+                                <div className="grid grid-cols-4 sm:grid-cols-5 md:grid-cols-6 lg:grid-cols-8 gap-1 max-h-52 overflow-y-auto p-2 bg-black/40 border border-[#FF0500]/50 rounded-xl settings-scrollbar">
+                                  {CUSTOM_COLUMN_DEFS.map(def => {
+                                    const isEnabled = enabledCustomColumns[def.id];
+                                    return (
+                                      <button
+                                        key={def.id}
+                                        onClick={() => {
+                                          setEnabledCustomColumns(prev => ({
+                                            ...prev,
+                                            [def.id]: !prev[def.id]
+                                          }));
+                                        }}
+                                        className={`py-1 px-1.5 rounded transition-all flex items-center justify-between text-white border text-[8px] font-mono leading-none ${
+                                          isEnabled 
+                                            ? 'bg-[#E25530] border-[#FF0500] shadow-[0_0_5px_rgba(226,85,48,0.3)] font-extrabold' 
+                                            : 'bg-[#E25530]/5 border-[#FF0500]/15 opacity-40 hover:opacity-100'
+                                        }`}
+                                        id={`custom-col-${def.id}-btn`}
+                                        title={translateColumnHeader(def.label, language)}
+                                      >
+                                        <span className="truncate mr-0.5 text-[8px] font-medium font-sans uppercase">{translateColumnHeader(def.label, language)}</span>
+                                        <span className="shrink-0 text-[7px] px-0.5 py-px rounded bg-black/40 text-white leading-none scale-90">
+                                          {isEnabled ? 'ON' : 'OFF'}
+                                        </span>
+                                      </button>
+                                    );
+                                  })}
+                                </div>
+                              </motion.div>
+                            )}
+                          </AnimatePresence>
                         </div>
 
                         {/* Traveller Registry Validation Section */}
@@ -2102,11 +2142,8 @@ export default function App() {
                           <div className="space-y-1">
                             <h3 className="text-[10px] uppercase tracking-widest font-bold text-[#FFB451] flex items-center gap-2">
                               <Settings className="w-3 h-3" />
-                              {t("Traveller Registry Validation")}
+                              {t("AGT Traveller Registration")}
                             </h3>
-                            <p className="text-[10px] text-[#FFB451]/60 font-mono tracking-wide">
-                              {t("Enter your registered Traveller Name and ID to authenticate and access higher security classifications")}
-                            </p>
                           </div>
                           
                           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -2173,7 +2210,7 @@ export default function App() {
                                   {t("Authenticating...")}
                                 </>
                               ) : (
-                                t("Verify Credentials")
+                                t("Save & Verify")
                               )}
                             </button>
                             
@@ -2182,15 +2219,48 @@ export default function App() {
                               className="px-6 py-3.5 bg-transparent border border-[#FF0500]/40 text-[#FFB451] hover:text-white hover:bg-[#FF0500]/10 rounded-xl text-[10px] uppercase tracking-[0.1em] font-semibold transition active:scale-[0.98]"
                               id="clear-traveller-btn"
                             >
-                              {t("Clear Credentials")}
+                              {t("Reset")}
                             </button>
 
                             {savedTravellerName && (
-                              <div className="ml-auto flex items-center gap-2 text-[10px] font-mono text-emerald-400 bg-emerald-950/20 border border-emerald-500/20 px-3 py-1.5 rounded-lg" id="saved-traveller-indicator">
-                                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                              <div 
+                                className="ml-auto flex items-center gap-2 text-[10px] font-mono px-3 py-1.5 rounded-lg border" 
+                                style={{
+                                  borderColor: getLevelColor(savedSecurityLevel),
+                                  color: getLevelColor(savedSecurityLevel),
+                                  backgroundColor: getLevelBgColor(savedSecurityLevel)
+                                }}
+                                id="saved-traveller-indicator"
+                              >
+                                <span 
+                                  className="w-1.5 h-1.5 rounded-full animate-pulse" 
+                                  style={{
+                                    backgroundColor: getLevelColor(savedSecurityLevel)
+                                  }}
+                                />
                                 <span>{t("Verified:")} {savedTravellerName} ({getSecurityLevelLabel(savedSecurityLevel)})</span>
                               </div>
                             )}
+                          </div>
+                        </div>
+
+                        {/* AGT Anthem (Audio Section) */}
+                        <div className="col-span-1 md:col-span-2 lg:col-span-3 pt-8 border-t border-[#FF0500]/20 space-y-4">
+                          <div className="flex items-center justify-between">
+                            <div className="space-y-1">
+                              <h3 className="text-[10px] uppercase tracking-widest font-bold text-[#FFB451] flex items-center gap-2">
+                                <Volume2 className="w-3 h-3" />
+                                {t("AGT Anthem")}
+                              </h3>
+                            </div>
+                            <button 
+                              onClick={() => setAudioEnabled(!audioEnabled)}
+                              className="flex items-center gap-3 px-6 py-3 rounded-xl border border-[#FF0500] bg-[#E25530] text-white transition-all text-[10px] uppercase tracking-widest font-bold hover:bg-[#E25530]/90"
+                              id="audio-toggle-btn"
+                            >
+                              {audioEnabled ? <Volume2 className="w-3.5 h-3.5" /> : <VolumeX className="w-3.5 h-3.5" />}
+                              {audioEnabled ? t('Active') : t('Muted')}
+                            </button>
                           </div>
                         </div>
 
