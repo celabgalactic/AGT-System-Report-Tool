@@ -338,8 +338,17 @@ export default function App() {
   });
   const [showSettings, setShowSettings] = useState(false);
   const [audioEnabled, setAudioEnabled] = useState<boolean>(() => {
-    const saved = localStorage.getItem('agt_audio_enabled');
-    return saved === null ? true : saved === 'true';
+    const isUserLoggedIn = !!getCookie('agt_traveller_name');
+    if (!isUserLoggedIn) {
+      const anonymousPref = getCookie('agt_audio_anonymous');
+      if (anonymousPref !== null) {
+        return anonymousPref === 'true';
+      }
+      return false;
+    } else {
+      const saved = localStorage.getItem('agt_audio_enabled');
+      return saved === null ? true : saved === 'true';
+    }
   });
   
   const audioRef = useRef<HTMLAudioElement>(null);
@@ -398,7 +407,13 @@ export default function App() {
         audioRef.current.pause();
       }
     }
-    localStorage.setItem('agt_audio_enabled', String(audioEnabled));
+    // If not logged in, we save the preference in a cookie too.
+    const isUserLoggedIn = !!getCookie('agt_traveller_name');
+    if (!isUserLoggedIn) {
+      setCookie('agt_audio_anonymous', String(audioEnabled));
+    } else {
+      localStorage.setItem('agt_audio_enabled', String(audioEnabled));
+    }
   }, [audioEnabled]);
 
   const handleManualPlay = () => {
@@ -459,6 +474,22 @@ export default function App() {
   const [savedTravellerName, setSavedTravellerName] = useState<string | null>(null);
   const [savedTravellerId, setSavedTravellerId] = useState<string | null>(null);
   const [savedSecurityLevel, setSavedSecurityLevel] = useState<number | null>(null);
+
+  // Sync audio enabled status when login status changes
+  useEffect(() => {
+    const isUserLoggedIn = !!savedTravellerName;
+    if (!isUserLoggedIn) {
+      const anonymousPref = getCookie('agt_audio_anonymous');
+      if (anonymousPref !== null) {
+        setAudioEnabled(anonymousPref === 'true');
+      } else {
+        setAudioEnabled(false);
+      }
+    } else {
+      const saved = localStorage.getItem('agt_audio_enabled');
+      setAudioEnabled(saved === null ? true : saved === 'true');
+    }
+  }, [savedTravellerName]);
   const [customColumnsExpanded, setCustomColumnsExpanded] = useState(false);
 
   const [omitPublicRecords, setOmitPublicRecords] = useState(false);
@@ -1727,7 +1758,16 @@ export default function App() {
         </div>
       </header>
 
-      <main className="max-w-5xl mx-auto px-6 py-16">
+      <main className="max-w-5xl mx-auto px-6 py-16 relative">
+        <a
+          href="https://www.nms-agt.com/contribute"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="absolute top-4 right-6 flex items-center gap-1.5 px-4 py-2 border border-[#FF0500] bg-[#E25530] text-white hover:bg-[#E25530]/90 rounded-lg text-[8px] uppercase tracking-[0.2em] font-black transition-all shadow-[0_2px_10px_rgba(226,85,48,0.15)] active:scale-[0.98]"
+          id="contribute-btn"
+        >
+          {t("Contribute")}
+        </a>
         <div className="flex flex-col gap-16">
           
           {/* Main Search Logic Container - centered aesthetic */}
