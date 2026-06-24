@@ -325,6 +325,17 @@ const getLevelBgColor = (level: number | null): string => {
   }
 };
 
+const formatCacheDate = (timestamp: number): string => {
+  const date = new Date(timestamp);
+  const day = String(date.getDate()).padStart(2, '0');
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const month = months[date.getMonth()];
+  const year = date.getFullYear();
+  const hours = String(date.getHours()).padStart(2, '0');
+  const minutes = String(date.getMinutes()).padStart(2, '0');
+  return `${day}-${month}-${year} ${hours}:${minutes}`;
+};
+
 export default function App() {
   const [reportType, setReportType] = useState<ReportType>('simple');
   const [sheetUrl, setSheetUrl] = useState<string>(() => {
@@ -336,6 +347,8 @@ export default function App() {
     if (!saved || saved === oldDefault || saved === previousDefault) return newDefault;
     return saved;
   });
+  const [usingCache, setUsingCache] = useState<boolean>(false);
+  const [cacheTimestamp, setCacheTimestamp] = useState<string | null>(() => localStorage.getItem('agt_db_cache_timestamp'));
   const [showSettings, setShowSettings] = useState(false);
   const [audioEnabled, setAudioEnabled] = useState<boolean>(() => {
     const isUserLoggedIn = !!getCookie('agt_traveller_name');
@@ -353,8 +366,24 @@ export default function App() {
   
   const audioRef = useRef<HTMLAudioElement>(null);
 
-  // Initial fetch
+  // Initial fetch / load cache
   useEffect(() => {
+    const cachedData = localStorage.getItem('agt_db_cache_rows');
+    const cachedTime = localStorage.getItem('agt_db_cache_timestamp');
+    if (cachedData && cachedTime) {
+      try {
+        const parsed = JSON.parse(cachedData);
+        if (Array.isArray(parsed) && parsed.length >= 2) {
+          setRawRows(parsed);
+          setCacheTimestamp(cachedTime);
+          setUsingCache(true);
+          return;
+        }
+      } catch (e) {
+        console.error("Failed to load cached database", e);
+      }
+    }
+
     if (sheetUrl) {
       fetchData();
     }
@@ -729,6 +758,17 @@ export default function App() {
           }
 
           setRawRows(parsedRows);
+          
+          // Save database copy to browser storage
+          try {
+            const nowStr = String(Date.now());
+            localStorage.setItem('agt_db_cache_rows', JSON.stringify(parsedRows));
+            localStorage.setItem('agt_db_cache_timestamp', nowStr);
+            setCacheTimestamp(nowStr);
+            setUsingCache(false);
+          } catch (e) {
+            console.error('Failed to cache database copy', e);
+          }
           
           const elapsed = Date.now() - startTime;
           setTimeout(() => {
@@ -1705,14 +1745,23 @@ export default function App() {
           </div>
           
           <div className="flex items-center gap-6">
-            <div className="hidden md:block text-[9px] text-agt-orange/30 tracking-widest font-mono">
-              {t("STATUS: ")}<span className={
-                loading ? 'text-yellow-500' :
-                sheetUrl ? 'text-emerald-500' : 
-                'text-red-500'
-              }>
-                {loading ? t('SYNCING') : sheetUrl ? t('CONNECTED') : t('DISCONNECTED')}
-              </span>
+            <div className="hidden md:flex flex-col items-end text-[9px] font-mono tracking-widest">
+              <div>
+                <span className="text-agt-orange/30">{t("STATUS: ")}</span>
+                <span className={
+                  loading ? 'text-yellow-500' :
+                  cacheTimestamp ? 'text-blue-500' :
+                  sheetUrl ? 'text-emerald-500' : 
+                  'text-red-500'
+                }>
+                  {loading ? t('SYNCING') : cacheTimestamp ? t('Cached') : sheetUrl ? t('CONNECTED') : t('DISCONNECTED')}
+                </span>
+              </div>
+              {!loading && cacheTimestamp && (
+                <div className="text-[8px] text-blue-400 font-mono tracking-wider mt-0.5" id="header-cache-time">
+                  {formatCacheDate(Number(cacheTimestamp))}
+                </div>
+              )}
             </div>
             {savedTravellerName && savedTravellerId ? (
               <div 
@@ -2316,15 +2365,23 @@ export default function App() {
                                 {t("System database sync may take up to 5 minutes")}
                               </p>
                             </div>
-                            <button 
-                              onClick={() => {
-                                fetchData();
-                              }}
-                              className="w-full sm:w-auto px-8 py-3.5 bg-[#E25530] border border-[#FF0500] text-white rounded-xl text-[10px] uppercase tracking-[0.1em] font-semibold hover:bg-[#E25530]/90 transition-colors shadow-[0_4px_20px_rgba(226,85,48,0.2)] active:scale-[0.98]"
-                              id="resync-db-btn"
-                            >
-                              {t("Re-Sync System DB")}
-                            </button>
+                            <div className="flex flex-col items-center sm:items-end gap-1.5 w-full sm:w-auto">
+                              <button 
+                                onClick={() => {
+                                  setShowSettings(false);
+                                  fetchData();
+                                }}
+                                className="w-full sm:w-auto px-8 py-3.5 bg-[#E25530] border border-[#FF0500] text-white rounded-xl text-[10px] uppercase tracking-[0.1em] font-semibold hover:bg-[#E25530]/90 transition-colors shadow-[0_4px_20px_rgba(226,85,48,0.2)] active:scale-[0.98]"
+                                id="resync-db-btn"
+                              >
+                                {t("Re-Sync System DB")}
+                              </button>
+                              {cacheTimestamp && (
+                                <span className="text-[10px] text-blue-500 font-mono tracking-wider" id="settings-cache-time">
+                                  {formatCacheDate(Number(cacheTimestamp))}
+                                </span>
+                              )}
+                            </div>
                           </div>
                         </div>
 
@@ -2583,8 +2640,8 @@ export default function App() {
                     <div className="p-6 border-t border-agt-orange/5 flex flex-col md:flex-row items-center justify-between gap-6 bg-agt-orange/[0.01]">
                       <div className="flex items-center gap-2">
                         <div className="relative flex h-2 w-2">
-                          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#00FF66] opacity-75"></span>
-                          <span className="relative inline-flex rounded-full h-2 w-2 bg-[#00FF66] shadow-[0_0_8px_rgba(0,255,102,0.6)]"></span>
+                          <span className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${usingCache ? 'bg-blue-500' : 'bg-[#00FF66]'}`}></span>
+                          <span className={`relative inline-flex rounded-full h-2 w-2 ${usingCache ? 'bg-blue-500 shadow-[0_0_8px_rgba(59,130,246,0.6)]' : 'bg-[#00FF66] shadow-[0_0_8px_rgba(0,255,102,0.6)]'}`}></span>
                         </div>
                         <span className="text-[9px] uppercase tracking-widest text-agt-orange font-bold">{t("Ledger Integrity: Verified")}</span>
                       </div>
