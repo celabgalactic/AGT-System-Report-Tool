@@ -20,7 +20,8 @@ import {
   Info,
   Volume2,
   VolumeX,
-  Globe
+  Globe,
+  Bug
 } from 'lucide-react';
 import Papa from 'papaparse';
 import { jsPDF } from 'jspdf';
@@ -336,6 +337,46 @@ const formatCacheDate = (timestamp: number): string => {
   return `${day}-${month}-${year} ${hours}:${minutes}`;
 };
 
+// IndexedDB configuration to handle large system database sizes (exceeding 5MB localStorage limit)
+const INDEXED_DB_NAME = 'agt_galactic_archive_db';
+const STORE_NAME = 'cache_store';
+
+const initIndexedDB = (): Promise<IDBDatabase> => {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(INDEXED_DB_NAME, 1);
+    request.onupgradeneeded = () => {
+      const db = request.result;
+      if (!db.objectStoreNames.contains(STORE_NAME)) {
+        db.createObjectStore(STORE_NAME);
+      }
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+};
+
+const setIndexedDBItem = async (key: string, value: any): Promise<void> => {
+  const db = await initIndexedDB();
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction(STORE_NAME, 'readwrite');
+    const store = transaction.objectStore(STORE_NAME);
+    const request = store.put(value, key);
+    request.onsuccess = () => resolve();
+    request.onerror = () => reject(request.error);
+  });
+};
+
+const getIndexedDBItem = async (key: string): Promise<any> => {
+  const db = await initIndexedDB();
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction(STORE_NAME, 'readonly');
+    const store = transaction.objectStore(STORE_NAME);
+    const request = store.get(key);
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+};
+
 export default function App() {
   const [reportType, setReportType] = useState<ReportType>('simple');
   const [sheetUrl, setSheetUrl] = useState<string>(() => {
@@ -366,26 +407,32 @@ export default function App() {
   
   const audioRef = useRef<HTMLAudioElement>(null);
 
-  // Initial fetch / load cache
+  // Initial fetch / load cache (using IndexedDB for raw rows to support large database sizes)
   useEffect(() => {
-    const cachedData = localStorage.getItem('agt_db_cache_rows');
     const cachedTime = localStorage.getItem('agt_db_cache_timestamp');
-    if (cachedData && cachedTime) {
-      try {
-        const parsed = JSON.parse(cachedData);
-        if (Array.isArray(parsed) && parsed.length >= 2) {
-          setRawRows(parsed);
-          setCacheTimestamp(cachedTime);
-          setUsingCache(true);
-          return;
-        }
-      } catch (e) {
-        console.error("Failed to load cached database", e);
+    if (cachedTime) {
+      getIndexedDBItem('agt_db_cache_rows')
+        .then(cachedData => {
+          if (cachedData && Array.isArray(cachedData) && cachedData.length >= 2) {
+            setRawRows(cachedData);
+            setCacheTimestamp(cachedTime);
+            setUsingCache(true);
+          } else {
+            if (sheetUrl) {
+              fetchData();
+            }
+          }
+        })
+        .catch(err => {
+          console.error("Failed to load cached database from IndexedDB", err);
+          if (sheetUrl) {
+            fetchData();
+          }
+        });
+    } else {
+      if (sheetUrl) {
+        fetchData();
       }
-    }
-
-    if (sheetUrl) {
-      fetchData();
     }
   }, []);
 
@@ -759,16 +806,21 @@ export default function App() {
 
           setRawRows(parsedRows);
           
-          // Save database copy to browser storage
-          try {
-            const nowStr = String(Date.now());
-            localStorage.setItem('agt_db_cache_rows', JSON.stringify(parsedRows));
-            localStorage.setItem('agt_db_cache_timestamp', nowStr);
-            setCacheTimestamp(nowStr);
-            setUsingCache(false);
-          } catch (e) {
-            console.error('Failed to cache database copy', e);
-          }
+          // Save database copy to browser storage (using IndexedDB for raw rows to bypass 5MB localStorage limit)
+          const nowStr = String(Date.now());
+          setIndexedDBItem('agt_db_cache_rows', parsedRows)
+            .then(() => {
+              localStorage.setItem('agt_db_cache_timestamp', nowStr);
+              setCacheTimestamp(nowStr);
+              setUsingCache(false);
+            })
+            .catch(e => {
+              console.error('Failed to cache database copy to IndexedDB', e);
+              // Fallback to update UI states anyway
+              localStorage.setItem('agt_db_cache_timestamp', nowStr);
+              setCacheTimestamp(nowStr);
+              setUsingCache(false);
+            });
           
           const elapsed = Date.now() - startTime;
           setTimeout(() => {
@@ -1745,7 +1797,7 @@ export default function App() {
           </div>
           
           <div className="flex items-center gap-6">
-            <div className="hidden md:flex flex-col items-end text-[9px] font-mono tracking-widest">
+            <div className="flex flex-col items-end text-[9px] font-mono tracking-widest text-right shrink-0">
               <div>
                 <span className="text-agt-orange/30">{t("STATUS: ")}</span>
                 <span className={
@@ -1789,6 +1841,18 @@ export default function App() {
                 {t("Public User")}
               </div>
             )}
+            <motion.a 
+              href="https://www.nms-agt.com/support"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="p-1.5 text-[#FF0500] transition-colors flex items-center justify-center cursor-pointer"
+              title="Support"
+              id="support-bug-btn"
+              whileHover={{ scale: 1.15, rotate: 15 }}
+              whileTap={{ scale: 0.9 }}
+            >
+              <Bug className="w-5 h-5" style={{ color: '#FF0500' }} />
+            </motion.a>
             <motion.button 
               onClick={() => setShowSettings(!showSettings)}
               className="p-2 hover:bg-[#FF0500]/5 rounded-lg transition-colors relative group text-[#FF0500]"
@@ -2378,7 +2442,7 @@ export default function App() {
                               </button>
                               {cacheTimestamp && (
                                 <span className="text-[10px] text-blue-500 font-mono tracking-wider" id="settings-cache-time">
-                                  {formatCacheDate(Number(cacheTimestamp))}
+                                  Last Cache: {formatCacheDate(Number(cacheTimestamp))}
                                 </span>
                               )}
                             </div>
